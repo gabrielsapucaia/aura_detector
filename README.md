@@ -1,51 +1,94 @@
-# Aura Sensor
+# Aura Sensor Logger v2
 
-Aplicativo Android que coleta telemetria 1 Hz (GNSS, IMU, barômetro) e publica mensagens MQTT redundantes enquanto grava cópias locais (CSV e fila JSONL). Pensado para tablets industriais rodando em modo serviço em primeiro plano.
+Aplicativo Android profissional para telemetria veicular em tempo real. Coleta dados de GNSS, IMU e sensores ambientais a 1 Hz, publicando via MQTT com fila offline resiliente e exportação CSV. Inclui Debug Dashboard responsivo para diagnóstico em campo.
 
-## Requisitos de ambiente
+## 🚀 Principais Funcionalidades
 
-- Android Studio Giraffe+ ou Gradle CLI (`./gradlew`)
-- Android SDK 34 / Build Tools 35.0.0
-- Dispositivo Android com Android 8.0 (API 26) ou superior
+### Coleta de Dados
+- **GNSS Raw Measurements**: Medições brutas por satélite (CN0, Doppler, AGC, SNR, multipath)
+- **IMU Completo**: Acelerômetro, giroscópio, magnetômetro, rotation vector
+- **World-Frame Acceleration**: Aceleração compensada pela orientação do tablet (longitudinal, lateral, vertical)
+- **Vehicle Dynamics**: Detecção de impacto, inclinação, risco de tombamento, estabilidade
+- **Barômetro**: Pressão atmosférica e altitude (quando disponível)
+- **Métricas Agregadas**: CN0 min/max/avg, Doppler speed/sigma, jerk, shock level
 
-## Configuração de credenciais
+### Telemetria
+- **MQTT Dual**: Suporta broker local (LAN) e cloud simultâneos
+- **Auto-Discovery**: Varredura automática de brokers na rede local
+- **Offline Queue**: Fila JSONL persistente para dados não enviados
+- **CSV Export**: Arquivo telemetry.csv com dados completos
+- **Schema v11**: Payload JSON otimizado e retrocompatível
 
-1. Copie `local.defaults.properties` para `local.properties` na raiz do projeto (não versionado):
+### Debug Dashboard
+- **Layout Responsivo**: Grade 2 colunas (portrait) / 3 colunas (landscape)
+- **6 Cards de Diagnóstico**:
+  - System/Service (status do logger, data age)
+  - GNSS/Positioning (qualidade de sinal, health, motion state)
+  - Vehicle Dynamics (impacto, curvas, freadas, roll risk)
+  - IMU Raw/Sensors (calibração, data rate)
+  - Barometer/Environment (auto-oculta se sem dados)
+  - Network/Upload (delivery status, sync)
+- **Tema Escuro**: Otimizado para uso prolongado
+- **Interpretações Coloridas**: Verde (OK), Amarelo (WARN), Vermelho (ALERTA)
 
-   ```bash
-   cp local.defaults.properties local.properties
-   ```
+## 📱 Requisitos
 
-2. Edite `local.properties` preenchendo os valores reais (URLs, usuários, senhas, keepalive, limpeza de sessão). Os campos são mapeados para `BuildConfig` pelo Gradle e ficam acessíveis em tempo de execução sem expor segredos no VCS.
-   - `MQTT_DISCOVERY_PREFIX` e `MQTT_DISCOVERY_RANGE` (ex.: prefixo `192.168.0` e intervalo `100-150`) habilitam um scanner interno que tenta localizar automaticamente o broker na rede caso os hosts configurados não respondam. O tempo limite por host pode ser ajustado com `MQTT_DISCOVERY_TIMEOUT_MS` (padrão 300 ms).
+- **Min SDK**: 26 (Android 8.0 Oreo)
+- **Target SDK**: 34 (Android 14)
+- **Android Studio**: Giraffe+ ou Gradle CLI
+- **Build Tools**: 35.0.0
+- **Hardware Testado**: Samsung Galaxy Tab S9 FE 5G (SM-X516B)
 
-3. Ajuste `ENABLE_LOCAL_BROKER` / `ENABLE_CLOUD_BROKER` para ativar cada destino MQTT.
+## ⚙️ Configuração
 
-## Execução
+### 1. Clone o Repositório
+git clone git@github.com:gabrielsapucaia/aura_detector.git
+cd aura_detector
 
-```bash
+### 2. Configurar Credenciais
+cp local.defaults.properties local.properties
+
+Edite local.properties com suas credenciais MQTT.
+
+### 3. Compilar e Instalar
+./gradlew assembleDebug
 ./gradlew installDebug
-```
 
-No primeiro uso, o aplicativo solicitará permissões (localização, sensores, reconhecimento de atividade) e pedirá para ser removido das otimizações de bateria.
+## 🔧 Ferramentas
 
-## Estrutura principal
+### Busca Automática de Broker
+powershell -ExecutionPolicy Bypass -File .\tools\find-broker.ps1
 
-- `MainActivity`: UI de login de operador, start/stop, status.
-- `service/TelemetryService`: Foreground service com ciclo 1 Hz.
-- `sensors/ImuAggregator`, `gnss/GnssManager`: coleta e agregação dos sensores.
-- `mqtt/MqttPublisher`: publicação redundante com fila offline (`storage/OfflineQueue`) e CSV (`storage/CsvWriter`).
-- `model/TelemetryPayload`: payload JSON serializado com kotlinx-serialization.
-- `boot/BootReceiver`: inicialização automática após boot.
+## 📊 Uso
 
-Logs adicionais ficam em `aurasensor.log` dentro da pasta de arquivos externos (`Android/data/com.example.sensorlogger/files/telemetry`). CSV (`telemetry.csv`) e fila (`pending_mqtt.jsonl`) residem na mesma pasta.
+1. Conceda permissões (Localização, Sensores, Notificações)
+2. Desative otimização de bateria
+3. Configure operador e equipamento
+4. Pressione INICIAR COLETA
 
-## Ferramentas úteis
+### Debug Dashboard
+Acesse via botão 🔧 Debug Dashboard na tela principal.
 
-- `tools/find-broker.ps1`: script PowerShell que varre uma sub-rede (padrão `192.168.0.x`) em busca de brokers MQTT na porta 1883 e atualiza automaticamente `local.properties` (`MQTT_HOST` e `MQTT_ADDITIONAL_HOSTS`). Execute assim que o IP do servidor mudar:
+## 📁 Arquivos de Dados
 
-  ```powershell
-  powershell -ExecutionPolicy Bypass -File .\tools\find-broker.ps1
-  ```
+Localização: /storage/emulated/0/Android/data/com.example.sensorlogger/files/telemetry/
 
-  Ajuste parâmetros (`-Subnet`, `-FromHost`, `-ToHost`, `-Port`) se sua rede usar outro intervalo.
+- telemetry.csv: Dados completos em CSV
+- pending_mqtt.jsonl: Fila offline
+- aurasensor.log: Logs da aplicação
+
+## 🏗️ Tecnologias
+
+- Kotlin 1.9+ com Coroutines
+- MQTT: Eclipse Paho
+- Serialização: Kotlinx Serialization
+- UI: Material Design 3
+- Arquitetura: MVVM + StateFlow
+
+## 📝 Versionamento
+
+- **v2.0.0** (2025-10-26): Release inicial
+
+## 📄 Licença
+
+Projeto proprietário - Uso interno apenas.
