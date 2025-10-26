@@ -107,6 +107,7 @@ class TelemetryService : LifecycleService() {
     private var isRunning = false
     private var queueFlushJob: Job? = null
     private var disconnectJob: Job? = null
+    private var queueMonitorJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -129,6 +130,20 @@ class TelemetryService : LifecycleService() {
             TelemetryStateStore.update { state -> state.copy(queueSize = size, offlineQueueSizeMB = sizeMB) }
             if (size > 0) {
                 drainTrigger.trySend(Unit)
+            }
+        }
+        queueMonitorJob = serviceScope.launch {
+            while (isActive) {
+                try {
+                    val count = offlineQueue.size()
+                    val sizeMB = offlineQueue.sizeInMB()
+                    TelemetryStateStore.update {
+                        it.copy(queueSize = count, offlineQueueSizeMB = sizeMB)
+                    }
+                } catch (e: Exception) {
+                    Timber.w(e, "Queue monitor update failed")
+                }
+                delay(2000L)
             }
         }
         serviceScope.launch {
@@ -200,6 +215,7 @@ class TelemetryService : LifecycleService() {
             networkCallbackRegistered = false
         }
         drainTrigger.close()
+        queueMonitorJob?.cancel()
         stopLogging()
         runBlocking { disconnectJob?.join() }
         serviceScope.cancel()
@@ -597,13 +613,13 @@ class TelemetryService : LifecycleService() {
                 val stored = offlineQueue.enqueue(payload, failedTargets, errorTag)
                 if (stored) {
                     drainTrigger.trySend(Unit)
+                    val queueSize = offlineQueue.size()
+                    val queueSizeMB = offlineQueue.sizeInMB()
+                    TelemetryStateStore.update { state -> state.copy(queueSize = queueSize, offlineQueueSizeMB = queueSizeMB) }
                 } else {
                     Timber.w("Offline queue drop for seq=%d: daily limit reached", payload.sequenceId)
                 }
             }
-            val queueSize = offlineQueue.size()
-            val queueSizeMB = offlineQueue.sizeInMB()
-            TelemetryStateStore.update { state -> state.copy(queueSize = queueSize, offlineQueueSizeMB = queueSizeMB) }
         }
     }
 

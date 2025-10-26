@@ -112,7 +112,17 @@ class OfflineQueue(context: Context) {
         }
     }
 
-    fun size(): Int = queueSize.get()
+    fun size(): Int {
+        val actualSize = telemetryDir.listFiles()
+            ?.filter { it.name.startsWith(PENDING_PREFIX) && it.name.endsWith(SUFFIX) }
+            ?.sumOf { file ->
+                file.takeIf { it.isFile }?.bufferedReader()?.use { reader ->
+                    reader.lineSequence().count { it.isNotBlank() }
+                } ?: 0
+            } ?: 0
+        queueSize.set(actualSize)
+        return actualSize
+    }
 
     fun sizeInMB(): Float {
         val totalBytes = telemetryDir.listFiles()
