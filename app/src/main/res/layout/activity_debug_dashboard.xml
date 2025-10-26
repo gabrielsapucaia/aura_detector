@@ -1,24 +1,125 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<GridLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#212121"
-    android:fillViewport="true">
+    android:columnCount="2"
+    android:rowCount="3"
+    android:background="#1A1A1A"
+    android:padding="4dp">
 
-    <GridLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:columnCount="2"
-        android:padding="8dp"
-        android:alignmentMode="alignBounds"
-        android:columnOrderPreserved="false">
+    <!-- Row 0, Col 0: SYSTEM / SERVICE -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_row="0"
+        android:layout_column="0"
+        android:layout_rowWeight="1"
+        android:layout_columnWeight="1"
+        android:layout_margin="2dp"
+        android:orientation="vertical"
+        android:background="#2A2A2A"
+        android:padding="6dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SYSTEM / SERVICE" android:textColor="#FFFFFF" android:textStyle="bold" android:textSize="11sp" android:paddingBottom="2dp"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="RAW DATA" android:textColor="#B0B0B0" android:textStyle="bold" android:textSize="10sp" android:paddingBottom="2dp"/>
+        <TextView android:id="@+id/systemRawText" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:fontFamily="monospace" android:textColor="#CCCCCC" android:textSize="9sp" android:text="--"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="INTERPRETATION" android:textColor="#B0B0B0" android:textStyle="bold" android:textSize="10sp" android:paddingTop="2dp" android:paddingBottom="2dp"/>
+        <TextView android:id="@+id/systemInterpText" android:layout_width="match_parent" android:layout_height="wrap_content" android:fontFamily="monospace" android:textSize="9sp" android:text="--"/>
+    </LinearLayout>
 
-        <include layout="@layout/card_system"/>
-        <include layout="@layout/card_gnss"/>
-        <include layout="@layout/card_vehicle"/>
-        <include layout="@layout/card_imu"/>
-        <include layout="@layout/card_baro"/>
-        <include layout="@layout/card_network"/>
+    <!-- Row 0, Col 1: GNSS / POSITIONING -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_row="0"
+        android:layout_column="1"
+        android:layout_rowWeight="1"
+        android:layout_columnWeight="1"
+        android:layout_margin="2dp"
+        android:orientation="vertical"
+        android:background="#2A2A2A"
+        android:padding="6dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="GNSS / POSITIONING" android:textColor="#FFFFFF" android:textStyle="bold" android:textSize="11sp" android:paddingBottom="2dp"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="RAW DATA" android:textColor="#B0B0B0" android:textStyle="bold" android:textSize="10sp" android:paddingBottom="2dp"/>
+        <TextView android:id="@+id/gnssRawText" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:fontFamily="monospace" android:textColor="#CCCCCC" android:textSize="9sp" android:text="--"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="INTERPRETATION" android:textColor="#B0B0B0" android:textStyle="bold" android:textSize="10sp" android:paddingTop="2dp" android:paddingBottom="2dp"/>
+        <TextView android:id="@+id/gnssInterpText" android:layout_width="match_parent" android:layout_height="wrap_content" android:fontFamily="monospace" android:textSize="9sp" android:text="--"/>
+    </LinearLayout>
 
-    </GridLayout>
-</ScrollView>
+    <!-- Row 1, Col 0: VEHICLE DYNAMICS -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_row="1"
+        android:layout_column="0"
+        android:layout_rowWeight="1"
+        android:layout_columnWeight="1"
+        android:layout_margin="2dp"
+        android:orientation="vertical"
+        android:background="#2A2A2A"
+        android:padding="6dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="VEHICLE DYNAMICS" android:textColor="#FFFFFF" android:textStyle="bold" android:textSize="11sp" android:paddingBottom="2dp"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="RAW DATA" android:textColor="#B0B0B0" android:textStyle="bold" android:textSize="10sp" android:paddingBottom="2dp"/>
+        <TextView android:id="@+id/vehicleRawText" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:fontFamily="monospace" android:textColor="#CCCCCC" android:textSize="9sp" android:text="--"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="INTERPRETATION" android:textColor="#B0B0B0" android:textStyle="bold" android:textSize="10sp" android:paddingTop="2dp" android:paddingBottom="2dp"/>
+        <TextView android:id="@+id/vehicleInterpText" android:layout_width="match_parent" android:layout_height="wrap_content" android:fontFamily="monospace" android:textSize="9sp" android:text="--"/>
+    </LinearLayout>
+
+    <!-- Row 1, Col 1: IMU RAW / SENSORS -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_row="1"
+        android:layout_column="1"
+        android:layout_rowWeight="1"
+        android:layout_columnWeight="1"
+        android:layout_margin="2dp"
+        android:orientation="vertical"
+        android:background="#2A2A2A"
+        android:padding="6dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="IMU RAW / SENSORS" android:textColor="#FFFFFF" android:textStyle="bold" android:textSize="11sp" android:paddingBottom="2dp"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="RAW DATA" android:textColor="#B0B0B0" android:textStyle="bold" android:textSize="10sp" android:paddingBottom="2dp"/>
+        <TextView android:id="@+id/imuRawText" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:fontFamily="monospace" android:textColor="#CCCCCC" android:textSize="9sp" android:text="--"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="INTERPRETATION" android:textColor="#B0B0B0" android:textStyle="bold" android:textSize="10sp" android:paddingTop="2dp" android:paddingBottom="2dp"/>
+        <TextView android:id="@+id/imuInterpText" android:layout_width="match_parent" android:layout_height="wrap_content" android:fontFamily="monospace" android:textSize="9sp" android:text="--"/>
+    </LinearLayout>
+
+    <!-- Row 2, Col 0: NETWORK / UPLOAD -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_row="2"
+        android:layout_column="0"
+        android:layout_rowWeight="1"
+        android:layout_columnWeight="1"
+        android:layout_margin="2dp"
+        android:orientation="vertical"
+        android:background="#2A2A2A"
+        android:padding="6dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="NETWORK / UPLOAD" android:textColor="#FFFFFF" android:textStyle="bold" android:textSize="11sp" android:paddingBottom="2dp"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="RAW DATA" android:textColor="#B0B0B0" android:textStyle="bold" android:textSize="10sp" android:paddingBottom="2dp"/>
+        <TextView android:id="@+id/networkRawText" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:fontFamily="monospace" android:textColor="#CCCCCC" android:textSize="9sp" android:text="--"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="INTERPRETATION" android:textColor="#B0B0B0" android:textStyle="bold" android:textSize="10sp" android:paddingTop="2dp" android:paddingBottom="2dp"/>
+        <TextView android:id="@+id/networkInterpText" android:layout_width="match_parent" android:layout_height="wrap_content" android:fontFamily="monospace" android:textSize="9sp" android:text="--"/>
+    </LinearLayout>
+
+    <!-- Row 2, Col 1: BAROMETER / ENVIRONMENT -->
+    <LinearLayout
+        android:id="@+id/barometerCardRoot"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_row="2"
+        android:layout_column="1"
+        android:layout_rowWeight="1"
+        android:layout_columnWeight="1"
+        android:layout_margin="2dp"
+        android:orientation="vertical"
+        android:background="#2A2A2A"
+        android:padding="6dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="BAROMETER / ENVIRONMENT" android:textColor="#FFFFFF" android:textStyle="bold" android:textSize="11sp" android:paddingBottom="2dp"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="RAW DATA" android:textColor="#B0B0B0" android:textStyle="bold" android:textSize="10sp" android:paddingBottom="2dp"/>
+        <TextView android:id="@+id/baroRawText" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:fontFamily="monospace" android:textColor="#CCCCCC" android:textSize="9sp" android:text="--"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="INTERPRETATION" android:textColor="#B0B0B0" android:textStyle="bold" android:textSize="10sp" android:paddingTop="2dp" android:paddingBottom="2dp"/>
+        <TextView android:id="@+id/baroInterpText" android:layout_width="match_parent" android:layout_height="wrap_content" android:fontFamily="monospace" android:textSize="9sp" android:text="--"/>
+    </LinearLayout>
+
+</GridLayout>

@@ -23,38 +23,28 @@ class DebugDashboardActivity : AppCompatActivity() {
     }
     
     // System views
-    private lateinit var systemRawData: TextView
-    private lateinit var systemLoggerStatus: TextView
-    private lateinit var systemDataAge: TextView
+    private lateinit var systemRawText: TextView
+    private lateinit var systemInterpText: TextView
     
     // GNSS views
-    private lateinit var gnssRawData: TextView
-    private lateinit var gnssPosQuality: TextView
-    private lateinit var gnssSignalEnv: TextView
-    private lateinit var gnssMotionState: TextView
-    private lateinit var gnssHealth: TextView
+    private lateinit var gnssRawText: TextView
+    private lateinit var gnssInterpText: TextView
     
     // Vehicle views
-    private lateinit var vehicleRawData: TextView
-    private lateinit var vehicleImpactSeverity: TextView
-    private lateinit var vehicleCurveAggr: TextView
-    private lateinit var vehicleBrakeAccel: TextView
-    private lateinit var vehicleRollRisk: TextView
-    private lateinit var vehicleStability: TextView
+    private lateinit var vehicleRawText: TextView
+    private lateinit var vehicleInterpText: TextView
     
     // IMU views
-    private lateinit var imuRawData: TextView
-    private lateinit var imuCalibStatus: TextView
-    private lateinit var imuDataRate: TextView
+    private lateinit var imuRawText: TextView
+    private lateinit var imuInterpText: TextView
     
     // Baro views
-    private lateinit var baroRawData: TextView
-    private lateinit var baroStatus: TextView
+    private lateinit var baroRawText: TextView
+    private lateinit var baroInterpText: TextView
     
     // Network views
-    private lateinit var networkRawData: TextView
-    private lateinit var networkDeliveryStatus: TextView
-    private lateinit var networkOperatorSync: TextView
+    private lateinit var networkRawText: TextView
+    private lateinit var networkInterpText: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,38 +56,28 @@ class DebugDashboardActivity : AppCompatActivity() {
     
     private fun bindViews() {
         // System
-        systemRawData = findViewById(R.id.system_rawData)
-        systemLoggerStatus = findViewById(R.id.system_loggerStatusText)
-        systemDataAge = findViewById(R.id.system_dataAgeText)
+        systemRawText = findViewById(R.id.systemRawText)
+        systemInterpText = findViewById(R.id.systemInterpText)
         
         // GNSS
-        gnssRawData = findViewById(R.id.gnss_rawData)
-        gnssPosQuality = findViewById(R.id.gnss_posQualityText)
-        gnssSignalEnv = findViewById(R.id.gnss_signalEnvText)
-        gnssMotionState = findViewById(R.id.gnss_motionStateText)
-        gnssHealth = findViewById(R.id.gnss_healthText)
+        gnssRawText = findViewById(R.id.gnssRawText)
+        gnssInterpText = findViewById(R.id.gnssInterpText)
         
         // Vehicle
-        vehicleRawData = findViewById(R.id.vehicle_rawData)
-        vehicleImpactSeverity = findViewById(R.id.vehicle_impactSeverityText)
-        vehicleCurveAggr = findViewById(R.id.vehicle_curveAggressivenessText)
-        vehicleBrakeAccel = findViewById(R.id.vehicle_brakeAccelText)
-        vehicleRollRisk = findViewById(R.id.vehicle_rollRiskText)
-        vehicleStability = findViewById(R.id.vehicle_stabilityText)
+        vehicleRawText = findViewById(R.id.vehicleRawText)
+        vehicleInterpText = findViewById(R.id.vehicleInterpText)
         
         // IMU
-        imuRawData = findViewById(R.id.imu_rawData)
-        imuCalibStatus = findViewById(R.id.imu_calibStatusText)
-        imuDataRate = findViewById(R.id.imu_dataRateText)
+        imuRawText = findViewById(R.id.imuRawText)
+        imuInterpText = findViewById(R.id.imuInterpText)
         
         // Baro
-        baroRawData = findViewById(R.id.baro_rawData)
-        baroStatus = findViewById(R.id.baro_statusText)
+        baroRawText = findViewById(R.id.baroRawText)
+        baroInterpText = findViewById(R.id.baroInterpText)
         
         // Network
-        networkRawData = findViewById(R.id.network_rawData)
-        networkDeliveryStatus = findViewById(R.id.network_deliveryStatusText)
-        networkOperatorSync = findViewById(R.id.network_operatorSyncText)
+        networkRawText = findViewById(R.id.networkRawText)
+        networkInterpText = findViewById(R.id.networkInterpText)
     }
     
     private fun observeTelemetryState() {
@@ -136,16 +116,16 @@ class DebugDashboardActivity : AppCompatActivity() {
         sb.append("serviceRunning: ${state.isServiceRunning}\n")
         sb.append("mqttStatus: ${state.mqttStatus}")
         
-        systemRawData.text = sb.toString()
+        systemRawText.text = sb.toString()
         
         // Interpretations
         val loggerStatus = calculateLoggerStatus(state)
-        systemLoggerStatus.text = "Logger: $loggerStatus"
-        systemLoggerStatus.setTextColor(getLoggerStatusColor(loggerStatus))
+        systemInterpText.append("Logger: $loggerStatus"
+        // systemLoggerStatus.setTextColor(getLoggerStatusColor(loggerStatus))
         
         val dataAge = calculateDataAge(payload?.timestampEpoch)
-        systemDataAge.text = dataAge.first
-        systemDataAge.setTextColor(dataAge.second)
+        systemInterpText.append("\n" +  dataAge.first
+        // systemDataAge.setTextColor(dataAge.second)
     }
     
     private fun updateGnssCard(state: TelemetryUiState) {
@@ -492,3 +472,4 @@ class DebugDashboardActivity : AppCompatActivity() {
         }
     }
 }
+
