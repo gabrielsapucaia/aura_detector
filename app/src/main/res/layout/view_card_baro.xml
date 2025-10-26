@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" android:layout_width="match_parent" android:layout_height="wrap_content" app:cardCornerRadius="8dp" app:cardElevation="4dp">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="12dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="BAROMETER / ENVIRONMENT" android:textSize="16sp" android:textStyle="bold" android:paddingBottom="8dp"/>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:paddingBottom="8dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="RAW DATA" android:textStyle="bold" android:textSize="13sp" android:paddingBottom="4dp"/>
+                <TextView android:id="@+id/baro_rawData" android:layout_width="match_parent" android:layout_height="wrap_content" android:fontFamily="monospace" android:textSize="11sp" android:text="Loading..."/>
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="INTERPRETATION" android:textStyle="bold" android:textSize="13sp" android:paddingBottom="4dp"/>
+                <TextView android:id="@+id/baro_statusText" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" android:text="Status: --"/>
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</androidx.cardview.widget.CardView>
