@@ -1,0 +1,81 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.9/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+> Task :app:checkKotlinGradlePluginConfigurationErrors
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:dataBindingMergeDependencyArtifactsDebug UP-TO-DATE
+> Task :app:generateDebugResValues UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:dataBindingGenBaseClassesDebug UP-TO-DATE
+> Task :app:generateDebugBuildConfig UP-TO-DATE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+
+> Task :app:compileDebugKotlin
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:348:1 Expecting a top level declaration
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:160:19 The floating-point literal does not conform to the expected type Nothing
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:160:33 The floating-point literal does not conform to the expected type Nothing
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:161:19 The floating-point literal does not conform to the expected type Nothing
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:161:34 The floating-point literal does not conform to the expected type Nothing
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:170:19 The floating-point literal does not conform to the expected type Nothing
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:171:19 The floating-point literal does not conform to the expected type Nothing
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:179:39 The floating-point literal does not conform to the expected type Nothing
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:210:23 None of the following functions can be called with the arguments supplied: 
+public inline fun abs(x: Double): Double defined in kotlin.math
+public inline fun abs(x: Float): Float defined in kotlin.math
+public inline fun abs(n: Int): Int defined in kotlin.math
+public inline fun abs(n: Long): Long defined in kotlin.math
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:220:22 None of the following functions can be called with the arguments supplied: 
+public inline fun abs(x: Double): Double defined in kotlin.math
+public inline fun abs(x: Float): Float defined in kotlin.math
+public inline fun abs(n: Int): Int defined in kotlin.math
+public inline fun abs(n: Long): Long defined in kotlin.math
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:228:23 Type mismatch: inferred type is Double but Nothing was expected
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:229:23 The floating-point literal does not conform to the expected type Nothing
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:236:20 None of the following functions can be called with the arguments supplied: 
+public inline fun abs(x: Double): Double defined in kotlin.math
+public inline fun abs(x: Float): Float defined in kotlin.math
+public inline fun abs(n: Int): Int defined in kotlin.math
+public inline fun abs(n: Long): Long defined in kotlin.math
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:276:9 Unresolved reference: imuRawText
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:276:20 Variable expected
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:286:31 The floating-point literal does not conform to the expected type Nothing
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:290:9 Unresolved reference: imuInterpText
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:290:23 Variable expected
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:302:24 Unresolved reference: findViewById
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:303:18 Variable expected
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:311:9 Unresolved reference: baroRawText
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:311:21 Variable expected
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:319:9 Unresolved reference: baroInterpText
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:319:24 Variable expected
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:330:9 Unresolved reference: networkRawText
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:330:24 Variable expected
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:346:9 Unresolved reference: networkInterpText
+e: file:///D:/newcode/newa2m_v2/Aura%20Sensor_v2/app/src/main/java/com/example/sensorlogger/DebugDashboardActivity.kt:346:27 Variable expected
+
+> Task :app:compileDebugKotlin FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileDebugKotlin'.
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 12s
+18 actionable tasks: 2 executed, 16 up-to-date

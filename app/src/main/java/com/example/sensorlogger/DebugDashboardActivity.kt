@@ -3,7 +3,6 @@ package com.example.sensorlogger
 import android.graphics.Color
 import android.os.Bundle
 import android.text.SpannableStringBuilder
-import android.text.style.ForegroundColorSpan
 import android.view.View
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -12,24 +11,50 @@ import com.example.sensorlogger.model.TelemetryUiState
 import com.example.sensorlogger.repository.TelemetryStateStore
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import timber.log.Timber
 import kotlin.math.abs
 
 class DebugDashboardActivity : AppCompatActivity() {
+
+    private val json = Json {
+        encodeDefaults = true
+        prettyPrint = true
+    }
     
-    // View references - consolidated RAW + INTERP per card
-    private lateinit var systemRawText: TextView
-    private lateinit var systemInterpText: TextView
-    private lateinit var gnssRawText: TextView
-    private lateinit var gnssInterpText: TextView
-    private lateinit var vehicleRawText: TextView
-    private lateinit var vehicleInterpText: TextView
-    private lateinit var imuRawText: TextView
-    private lateinit var imuInterpText: TextView
-    private lateinit var baroRawText: TextView
-    private lateinit var baroInterpText: TextView
-    private lateinit var networkRawText: TextView
-    private lateinit var networkInterpText: TextView
+    // System views
+    private lateinit var systemRawData: TextView
+    private lateinit var systemLoggerStatus: TextView
+    private lateinit var systemDataAge: TextView
+    
+    // GNSS views
+    private lateinit var gnssRawData: TextView
+    private lateinit var gnssPosQuality: TextView
+    private lateinit var gnssSignalEnv: TextView
+    private lateinit var gnssMotionState: TextView
+    private lateinit var gnssHealth: TextView
+    
+    // Vehicle views
+    private lateinit var vehicleRawData: TextView
+    private lateinit var vehicleImpactSeverity: TextView
+    private lateinit var vehicleCurveAggr: TextView
+    private lateinit var vehicleBrakeAccel: TextView
+    private lateinit var vehicleRollRisk: TextView
+    private lateinit var vehicleStability: TextView
+    
+    // IMU views
+    private lateinit var imuRawData: TextView
+    private lateinit var imuCalibStatus: TextView
+    private lateinit var imuDataRate: TextView
+    
+    // Baro views
+    private lateinit var baroRawData: TextView
+    private lateinit var baroStatus: TextView
+    
+    // Network views
+    private lateinit var networkRawData: TextView
+    private lateinit var networkDeliveryStatus: TextView
+    private lateinit var networkOperatorSync: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,26 +65,45 @@ class DebugDashboardActivity : AppCompatActivity() {
     }
     
     private fun bindViews() {
-        systemRawText = findViewById(R.id.systemRawText)
-        systemInterpText = findViewById(R.id.systemInterpText)
-        gnssRawText = findViewById(R.id.gnssRawText)
-        gnssInterpText = findViewById(R.id.gnssInterpText)
-        vehicleRawText = findViewById(R.id.vehicleRawText)
-        vehicleInterpText = findViewById(R.id.vehicleInterpText)
-        imuRawText = findViewById(R.id.imuRawText)
-        imuInterpText = findViewById(R.id.imuInterpText)
-        baroRawText = findViewById(R.id.baroRawText)
-        baroInterpText = findViewById(R.id.baroInterpText)
-        networkRawText = findViewById(R.id.networkRawText)
-        networkInterpText = findViewById(R.id.networkInterpText)
+        // System
+        systemRawData = findViewById(R.id.system_rawData)
+        systemLoggerStatus = findViewById(R.id.system_loggerStatusText)
+        systemDataAge = findViewById(R.id.system_dataAgeText)
+        
+        // GNSS
+        gnssRawData = findViewById(R.id.gnss_rawData)
+        gnssPosQuality = findViewById(R.id.gnss_posQualityText)
+        gnssSignalEnv = findViewById(R.id.gnss_signalEnvText)
+        gnssMotionState = findViewById(R.id.gnss_motionStateText)
+        gnssHealth = findViewById(R.id.gnss_healthText)
+        
+        // Vehicle
+        vehicleRawData = findViewById(R.id.vehicle_rawData)
+        vehicleImpactSeverity = findViewById(R.id.vehicle_impactSeverityText)
+        vehicleCurveAggr = findViewById(R.id.vehicle_curveAggressivenessText)
+        vehicleBrakeAccel = findViewById(R.id.vehicle_brakeAccelText)
+        vehicleRollRisk = findViewById(R.id.vehicle_rollRiskText)
+        vehicleStability = findViewById(R.id.vehicle_stabilityText)
+        
+        // IMU
+        imuRawData = findViewById(R.id.imu_rawData)
+        imuCalibStatus = findViewById(R.id.imu_calibStatusText)
+        imuDataRate = findViewById(R.id.imu_dataRateText)
+        
+        // Baro
+        baroRawData = findViewById(R.id.baro_rawData)
+        baroStatus = findViewById(R.id.baro_statusText)
+        
+        // Network
+        networkRawData = findViewById(R.id.network_rawData)
+        networkDeliveryStatus = findViewById(R.id.network_deliveryStatusText)
+        networkOperatorSync = findViewById(R.id.network_operatorSyncText)
     }
     
     private fun observeTelemetryState() {
         lifecycleScope.launch {
             TelemetryStateStore.state.collectLatest { state ->
-                runOnUiThread {
-                    updateUI(state)
-                }
+                updateUI(state)
             }
         }
     }
@@ -79,238 +123,372 @@ class DebugDashboardActivity : AppCompatActivity() {
     
     private fun updateSystemCard(state: TelemetryUiState) {
         val payload = state.lastPayload
+        val sb = SpannableStringBuilder()
         
-        // RAW DATA
-        val raw = StringBuilder()
-        raw.append("device.id: ${payload?.deviceId ?: "N/A"}\n")
-        raw.append("operator.id: ${payload?.operatorId ?: "N/A"}\n")
-        raw.append("equipment.tag: ${payload?.equipmentTag ?: "N/A"}\n")
-        raw.append("seq_id: ${payload?.sequenceId ?: 0}\n")
-        raw.append("schema.version: ${payload?.schemaVersion ?: "N/A"}\n")
-        raw.append("ts_epoch: ${payload?.timestampEpoch ?: "N/A"}\n")
-        raw.append("imu.fps_eff: ${payload?.imuFpsEffective?.let { "%.1f".format(it) } ?: "N/A"}\n")
-        raw.append("imu.samples: ${payload?.imuSamples ?: "N/A"}\n")
-        raw.append("serviceRunning: ${state.isServiceRunning}\n")
-        raw.append("mqttStatus: ${state.mqttStatus}")
-        systemRawText.text = raw.toString()
+        sb.append("device.id: ${payload?.deviceId ?: "N/A"}\n")
+        sb.append("operator.id: ${payload?.operatorId ?: "N/A"}\n")
+        sb.append("equipment.tag: ${payload?.equipmentTag ?: "N/A"}\n")
+        sb.append("seq_id: ${payload?.sequenceId ?: "N/A"}\n")
+        sb.append("schema.version: ${payload?.schemaVersion ?: "N/A"}\n")
+        sb.append("ts_epoch: ${payload?.timestampEpoch ?: "N/A"}\n")
+        sb.append("imu.fps_eff: ${payload?.imuFpsEffective?.let { "%.1f".format(it) } ?: "N/A"}\n")
+        sb.append("imu.samples: ${payload?.imuSamples ?: "N/A"}\n")
+        sb.append("serviceRunning: ${state.isServiceRunning}\n")
+        sb.append("mqttStatus: ${state.mqttStatus}")
         
-        // INTERPRETATION
-        val interp = SpannableStringBuilder()
-        val loggerStatus = if (state.isServiceRunning) {
-            if (state.mqttStatus == "Connected") "OK" else "DEGRADED"
-        } else "STOPPED"
-        val loggerColor = when (loggerStatus) {
-            "OK" -> Color.GREEN
-            "DEGRADED" -> Color.YELLOW
-            else -> Color.RED
-        }
-        interp.append("Logger: $loggerStatus\n", ForegroundColorSpan(loggerColor), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
+        systemRawData.text = sb.toString()
         
-        val dataAge = (System.currentTimeMillis() - (payload?.timestampEpoch ?: 0)) / 1000.0
-        val ageText = "Data age: ${"%.1f".format(dataAge)} s"
-        val ageColor = when {
-            dataAge < 5.0 -> Color.GREEN
-            dataAge < 30.0 -> Color.YELLOW
-            else -> Color.RED
-        }
-        interp.append(ageText, ForegroundColorSpan(ageColor), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
-        systemInterpText.text = interp
+        // Interpretations
+        val loggerStatus = calculateLoggerStatus(state)
+        systemLoggerStatus.text = "Logger: $loggerStatus"
+        systemLoggerStatus.setTextColor(getLoggerStatusColor(loggerStatus))
+        
+        val dataAge = calculateDataAge(payload?.timestampEpoch)
+        systemDataAge.text = dataAge.first
+        systemDataAge.setTextColor(dataAge.second)
     }
     
     private fun updateGnssCard(state: TelemetryUiState) {
-        val p = state.lastPayload
+        val payload = state.lastPayload
+        val sb = SpannableStringBuilder()
         
-        // RAW DATA
-        val raw = StringBuilder()
-        raw.append("lat: ${p?.latitude?.let { "%.6f".format(it) } ?: "N/A"}\n")
-        raw.append("lon: ${p?.longitude?.let { "%.6f".format(it) } ?: "N/A"}\n")
-        raw.append("alt: ${p?.altitude?.let { "%.1f".format(it) } ?: "N/A"} m\n")
-        raw.append("speed: ${p?.speed?.let { "%.2f".format(it) } ?: "N/A"} m/s\n")
-        raw.append("course: ${p?.course?.let { "%.1f".format(it) } ?: "N/A"}°\n")
-        raw.append("accuracy: ${p?.accuracyMeters?.let { "%.1f".format(it) } ?: "N/A"} m\n")
-        raw.append("vert_acc: ${p?.verticalAccuracyMeters?.let { "%.1f".format(it) } ?: "N/A"} m\n")
-        raw.append("hdop: ${p?.hdop?.let { "%.2f".format(it) } ?: "N/A"}\n")
-        raw.append("vdop: ${p?.vdop?.let { "%.2f".format(it) } ?: "N/A"}\n")
-        raw.append("pdop: ${p?.pdop?.let { "%.2f".format(it) } ?: "N/A"}\n")
-        raw.append("num_sats: ${p?.satellitesUsed ?: "N/A"}\n")
-        raw.append("sats_visible: ${p?.satellitesVisible ?: "N/A"}\n")
-        raw.append("cn0_avg: ${p?.cn0Average?.let { "%.1f".format(it) } ?: "N/A"}\n")
-        raw.append("cn0_min: ${p?.cn0Min?.let { "%.1f".format(it) } ?: "N/A"}\n")
-        raw.append("cn0_max: ${p?.cn0Max?.let { "%.1f".format(it) } ?: "N/A"}\n")
-        raw.append("provider: ${p?.provider ?: "N/A"}\n")
-        raw.append("has_l5: ${p?.hasL5 ?: false}\n")
-        raw.append("gps_used: ${p?.gpsUsed ?: 0}\n")
-        raw.append("galileo_used: ${p?.galileoUsed ?: 0}\n")
-        raw.append("glonass_used: ${p?.glonassUsed ?: 0}\n")
-        raw.append("beidou_used: ${p?.beidouUsed ?: 0}\n")
-        raw.append("raw_supported: ${p?.gnssRawSupported ?: false}\n")
-        raw.append("raw_count: ${p?.gnssRawCount ?: 0}")
-        gnssRawText.text = raw.toString()
+        sb.append("lat: ${payload?.latitude?.let { "%.6f".format(it) } ?: "N/A"}\n")
+        sb.append("lon: ${payload?.longitude?.let { "%.6f".format(it) } ?: "N/A"}\n")
+        sb.append("alt: ${payload?.altitude?.let { "%.1f".format(it) } ?: "N/A"} m\n")
+        sb.append("speed: ${payload?.speed?.let { "%.2f".format(it) } ?: "N/A"} m/s\n")
+        sb.append("course: ${payload?.course?.let { "%.1f".format(it) } ?: "N/A"}°\n")
+        sb.append("accuracy: ${payload?.accuracyMeters?.let { "%.1f".format(it) } ?: "N/A"} m\n")
+        sb.append("vert_accuracy: ${payload?.verticalAccuracyMeters?.let { "%.1f".format(it) } ?: "N/A"} m\n")
+        sb.append("hdop: ${payload?.hdop?.let { "%.2f".format(it) } ?: "N/A"}\n")
+        sb.append("vdop: ${payload?.vdop?.let { "%.2f".format(it) } ?: "N/A"}\n")
+        sb.append("pdop: ${payload?.pdop?.let { "%.2f".format(it) } ?: "N/A"}\n")
+        sb.append("num_sats: ${payload?.satellitesUsed ?: "N/A"}\n")
+        sb.append("sats_visible: ${payload?.satellitesVisible ?: "N/A"}\n")
+        sb.append("cn0_avg: ${payload?.cn0Average?.let { "%.1f".format(it) } ?: "N/A"} dB-Hz\n")
+        sb.append("cn0_min: ${payload?.cn0Min?.let { "%.1f".format(it) } ?: "N/A"} dB-Hz\n")
+        sb.append("cn0_max: ${payload?.cn0Max?.let { "%.1f".format(it) } ?: "N/A"} dB-Hz\n")
+        sb.append("provider: ${payload?.provider ?: "N/A"}\n")
+        sb.append("has_l5: ${payload?.hasL5 ?: false}\n")
+        sb.append("gps_used: ${payload?.gpsUsed ?: 0}\n")
+        sb.append("galileo_used: ${payload?.galileoUsed ?: 0}\n")
+        sb.append("glonass_used: ${payload?.glonassUsed ?: 0}\n")
+        sb.append("beidou_used: ${payload?.beidouUsed ?: 0}\n")
+        sb.append("raw_supported: ${payload?.gnssRawSupported ?: false}\n")
+        sb.append("raw_count: ${payload?.gnssRawCount ?: 0}\n")
         
-        // INTERPRETATION
-        val interp = SpannableStringBuilder()
-        val acc = p?.accuracyMeters ?: 999.0
-        val hdop = p?.hdop ?: 99.0
-        val sats = p?.satellitesUsed ?: 0
-        val posQuality = when {
-            acc < 5.0 && hdop < 2.0 && sats >= 7 -> Pair("OK", Color.GREEN)
-            acc < 15.0 || hdop < 4.0 -> Pair("WARN", Color.YELLOW)
-            else -> Pair("BAD", Color.RED)
+        payload?.gnssRaw?.let { raw ->
+            sb.append("doppler_speed: ${raw.dopplerSpeedMps?.let { "%.2f".format(it) } ?: "N/A"} m/s\n")
+            sb.append("doppler_sigma: ${raw.dopplerSpeedSigma?.let { "%.2f".format(it) } ?: "N/A"}\n")
+            sb.append("sat_update_age: ${raw.satUpdateAgeMs ?: "N/A"} ms\n")
+            sb.append("time_to_fix: ${raw.timeToFirstFixMs?.let { "%.0f".format(it) } ?: "N/A"} ms")
         }
-        interp.append("Position quality: ${posQuality.first}\n", ForegroundColorSpan(posQuality.second), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
         
-        val cn0 = p?.cn0Average ?: 0.0
-        val signalEnv = when {
-            cn0 > 30.0 -> "céu aberto"
-            cn0 > 20.0 -> "parcial bloq"
-            else -> "degradado"
-        }
-        interp.append("Signal env: $signalEnv\n", ForegroundColorSpan(Color.LTGRAY), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
+        gnssRawData.text = sb.toString()
         
-        val speed = p?.speed ?: 0.0
-        val motionState = if (speed < 0.5) "parado" else "movendo"
-        interp.append("Motion state: $motionState\n", ForegroundColorSpan(Color.LTGRAY), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
+        // Interpretations
+        val posQuality = calculatePosQuality(payload)
+        gnssPosQuality.text = "Position quality: ${posQuality.first}"
+        gnssPosQuality.setTextColor(posQuality.second)
         
-        val health = if (sats >= 4) Pair("OK", Color.GREEN) else Pair("PERDENDO FIX", Color.RED)
-        interp.append("GNSS health: ${health.first}", ForegroundColorSpan(health.second), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
-        gnssInterpText.text = interp
+        val signalEnv = calculateSignalEnv(payload?.cn0Average)
+        gnssSignalEnv.text = "Signal env: $signalEnv"
+        
+        val motionState = calculateMotionState(payload)
+        gnssMotionState.text = "Motion state: $motionState"
+        
+        val gnssHealthResult = calculateGnssHealth(payload)
+        gnssHealth.text = "GNSS health: ${gnssHealthResult.first}"
+        gnssHealth.setTextColor(gnssHealthResult.second)
     }
     
     private fun updateVehicleCard(state: TelemetryUiState) {
-        val p = state.lastPayload
+        val payload = state.lastPayload
+        val sb = SpannableStringBuilder()
         
-        // RAW DATA
-        val raw = StringBuilder()
-        raw.append("acc_long: ${p?.accLongitudinalMps2?.let { "%.3f".format(it) } ?: "N/A"} m/s²\n")
-        raw.append("acc_lat: ${p?.accLateralMps2?.let { "%.3f".format(it) } ?: "N/A"} m/s²\n")
-        raw.append("acc_vert: ${p?.accVerticalMps2?.let { "%.3f".format(it) } ?: "N/A"} m/s²\n")
-        raw.append("tilt_pitch: ${p?.vehicleTiltPitchDeg?.let { "%.2f".format(it) } ?: "N/A"}°\n")
-        raw.append("tilt_roll: ${p?.vehicleTiltRollDeg?.let { "%.2f".format(it) } ?: "N/A"}°\n")
-        raw.append("shock_level: ${p?.motionShockLevel ?: "N/A"}\n")
-        raw.append("shock_score: ${p?.motionShockScore?.let { "%.2f".format(it) } ?: "N/A"}\n")
-        raw.append("stationary: ${p?.motionStationary ?: "N/A"}\n")
-        raw.append("yaw_rate: ${p?.yawRateDegPerSec?.let { "%.2f".format(it) } ?: "N/A"} °/s\n")
-        raw.append("gnss.speed: ${p?.speed?.let { "%.2f".format(it) } ?: "N/A"} m/s")
-        vehicleRawText.text = raw.toString()
+        sb.append("acc_longitudinal: ${payload?.accLongitudinalMps2?.let { "%.3f".format(it) } ?: "N/A"} m/s²\n")
+        sb.append("acc_lateral: ${payload?.accLateralMps2?.let { "%.3f".format(it) } ?: "N/A"} m/s²\n")
+        sb.append("acc_vertical: ${payload?.accVerticalMps2?.let { "%.3f".format(it) } ?: "N/A"} m/s²\n")
+        sb.append("tilt_pitch: ${payload?.vehicleTiltPitchDeg?.let { "%.2f".format(it) } ?: "N/A"}°\n")
+        sb.append("tilt_roll: ${payload?.vehicleTiltRollDeg?.let { "%.2f".format(it) } ?: "N/A"}°\n")
+        sb.append("shock_level: ${payload?.motionShockLevel ?: "N/A"}\n")
+        sb.append("shock_score: ${payload?.motionShockScore?.let { "%.2f".format(it) } ?: "N/A"}\n")
+        sb.append("stationary: ${payload?.motionStationary ?: "N/A"}\n")
+        sb.append("yaw_rate: ${payload?.yawRateDegPerSec?.let { "%.2f".format(it) } ?: "N/A"} °/s\n")
+        sb.append("gnss.speed: ${payload?.speed?.let { "%.2f".format(it) } ?: "N/A"} m/s")
         
-        // INTERPRETATION
-        val interp = SpannableStringBuilder()
-        val accVert = abs(p?.accVerticalMps2 ?: 0.0)
-        val impact = when {
-            accVert > 1.5 || p?.motionShockLevel == "high" -> Pair("IMPACTO FORTE", Color.RED)
-            accVert > 0.5 -> Pair("IMPACTO MEDIO", Color.YELLOW)
-            else -> Pair("OK", Color.GREEN)
-        }
-        interp.append("Impact: ${impact.first}\n", ForegroundColorSpan(impact.second), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
+        vehicleRawData.text = sb.toString()
         
-        val accLat = abs(p?.accLateralMps2 ?: 0.0)
-        val curve = if (accLat > 1.5) Pair("CURVA AGRESSIVA", Color.RED) else Pair("NORMAL", Color.GREEN)
-        interp.append("Curve: ${curve.first}\n", ForegroundColorSpan(curve.second), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
+        // Interpretations
+        val impactSeverity = calculateImpactSeverity(payload)
+        vehicleImpactSeverity.text = "Impact: ${impactSeverity.first}"
+        vehicleImpactSeverity.setTextColor(impactSeverity.second)
         
-        val accLong = p?.accLongitudinalMps2 ?: 0.0
-        val brakeAccel = when {
-            accLong < -1.5 -> Pair("FREADA FORTE", Color.RED)
-            accLong > 1.5 -> Pair("ACELERAÇÃO FORTE", Color.YELLOW)
-            else -> Pair("OK", Color.GREEN)
-        }
-        interp.append("Brake/Accel: ${brakeAccel.first}\n", ForegroundColorSpan(brakeAccel.second), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val curveAggr = calculateCurveAggression(payload)
+        vehicleCurveAggr.text = "Curve: ${curveAggr.first}"
+        vehicleCurveAggr.setTextColor(curveAggr.second)
         
-        val roll = abs(p?.vehicleTiltRollDeg ?: 0.0)
-        val rollRisk = when {
-            roll > 15 -> Pair("ALERTA TOMBAMENTO", Color.RED)
-            roll > 8 -> Pair("Inclinação Alta", Color.YELLOW)
-            else -> Pair("Estável", Color.GREEN)
-        }
-        interp.append("Roll risk: ${rollRisk.first}\n", ForegroundColorSpan(rollRisk.second), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val brakeAccel = calculateBrakeAccel(payload)
+        vehicleBrakeAccel.text = "Brake/Accel: ${brakeAccel.first}"
+        vehicleBrakeAccel.setTextColor(brakeAccel.second)
         
-        val stability = if (p?.motionStationary == true) "PARADO" else "MOVIMENTO"
-        interp.append("Stability: $stability", ForegroundColorSpan(Color.LTGRAY), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
-        vehicleInterpText.text = interp
+        val rollRisk = calculateRollRisk(payload)
+        vehicleRollRisk.text = "Roll risk: ${rollRisk.first}"
+        vehicleRollRisk.setTextColor(rollRisk.second)
+        
+        val stability = calculateStability(payload)
+        vehicleStability.text = "Stability: $stability"
     }
     
     private fun updateImuCard(state: TelemetryUiState) {
-        val p = state.lastPayload
+        val payload = state.lastPayload
+        val sb = SpannableStringBuilder()
         
-        // RAW DATA
-        val raw = StringBuilder()
-        raw.append("pitch: ${p?.pitchDeg?.let { "%.2f".format(it) } ?: "N/A"}°\n")
-        raw.append("roll: ${p?.rollDeg?.let { "%.2f".format(it) } ?: "N/A"}°\n")
-        raw.append("yaw: ${p?.yawDeg?.let { "%.2f".format(it) } ?: "N/A"}°\n")
-        raw.append("q.w: ${p?.quaternionW?.let { "%.3f".format(it) } ?: "N/A"}\n")
-        raw.append("q.x: ${p?.quaternionX?.let { "%.3f".format(it) } ?: "N/A"}\n")
-        raw.append("q.y: ${p?.quaternionY?.let { "%.3f".format(it) } ?: "N/A"}\n")
-        raw.append("q.z: ${p?.quaternionZ?.let { "%.3f".format(it) } ?: "N/A"}\n")
-        raw.append("linear_acc.x: ${p?.linearAccXMean?.let { "%.3f".format(it) } ?: "N/A"}\n")
-        raw.append("linear_acc.y: ${p?.linearAccYMean?.let { "%.3f".format(it) } ?: "N/A"}\n")
-        raw.append("linear_acc.z: ${p?.linearAccZMean?.let { "%.3f".format(it) } ?: "N/A"}\n")
-        raw.append("gyro.x: ${p?.gyroXMean?.let { "%.3f".format(it) } ?: "N/A"}\n")
-        raw.append("gyro.y: ${p?.gyroYMean?.let { "%.3f".format(it) } ?: "N/A"}\n")
-        raw.append("gyro.z: ${p?.gyroZMean?.let { "%.3f".format(it) } ?: "N/A"}\n")
-        raw.append("jerk.rms: ${p?.jerkNormRms?.let { "%.3f".format(it) } ?: "N/A"}\n")
-        raw.append("mag.field: ${p?.magnetometerFieldStrength?.let { "%.1f".format(it) } ?: "N/A"} µT\n")
-        raw.append("fps_eff: ${p?.imuFpsEffective?.let { "%.1f".format(it) } ?: "N/A"}\n")
-        raw.append("samples: ${p?.imuSamples ?: "N/A"}")
-        imuRawText.text = raw.toString()
+        sb.append("pitch: ${payload?.pitchDeg?.let { "%.2f".format(it) } ?: "N/A"}°\n")
+        sb.append("roll: ${payload?.rollDeg?.let { "%.2f".format(it) } ?: "N/A"}°\n")
+        sb.append("yaw: ${payload?.yawDeg?.let { "%.2f".format(it) } ?: "N/A"}°\n")
+        sb.append("quaternion w/x/y/z: ${payload?.quaternionW?.let { "%.3f".format(it) } ?: "N/A"} / ")
+        sb.append("${payload?.quaternionX?.let { "%.3f".format(it) } ?: "N/A"} / ")
+        sb.append("${payload?.quaternionY?.let { "%.3f".format(it) } ?: "N/A"} / ")
+        sb.append("${payload?.quaternionZ?.let { "%.3f".format(it) } ?: "N/A"}\n")
+        sb.append("linear_acc x/y/z mean: ${payload?.linearAccXMean?.let { "%.3f".format(it) } ?: "N/A"} / ")
+        sb.append("${payload?.linearAccYMean?.let { "%.3f".format(it) } ?: "N/A"} / ")
+        sb.append("${payload?.linearAccZMean?.let { "%.3f".format(it) } ?: "N/A"} m/s²\n")
+        sb.append("linear_acc x/y/z sigma: ${payload?.linearAccXSigma?.let { "%.3f".format(it) } ?: "N/A"} / ")
+        sb.append("${payload?.linearAccYSigma?.let { "%.3f".format(it) } ?: "N/A"} / ")
+        sb.append("${payload?.linearAccZSigma?.let { "%.3f".format(it) } ?: "N/A"}\n")
+        sb.append("linear_acc norm rms: ${payload?.linearAccNormRms?.let { "%.3f".format(it) } ?: "N/A"}\n")
+        sb.append("gyro x/y/z mean: ${payload?.gyroXMean?.let { "%.3f".format(it) } ?: "N/A"} / ")
+        sb.append("${payload?.gyroYMean?.let { "%.3f".format(it) } ?: "N/A"} / ")
+        sb.append("${payload?.gyroZMean?.let { "%.3f".format(it) } ?: "N/A"} rad/s\n")
+        sb.append("gyro x/y/z sigma: ${payload?.gyroXSigma?.let { "%.3f".format(it) } ?: "N/A"} / ")
+        sb.append("${payload?.gyroYSigma?.let { "%.3f".format(it) } ?: "N/A"} / ")
+        sb.append("${payload?.gyroZSigma?.let { "%.3f".format(it) } ?: "N/A"}\n")
+        sb.append("jerk norm rms: ${payload?.jerkNormRms?.let { "%.3f".format(it) } ?: "N/A"}\n")
+        sb.append("jerk norm sigma: ${payload?.jerkNormSigma?.let { "%.3f".format(it) } ?: "N/A"}\n")
+        sb.append("mag field strength: ${payload?.magnetometerFieldStrength?.let { "%.1f".format(it) } ?: "N/A"} µT\n")
+        sb.append("fps_eff: ${payload?.imuFpsEffective?.let { "%.1f".format(it) } ?: "N/A"}\n")
+        sb.append("samples: ${payload?.imuSamples ?: "N/A"}\n")
+        sb.append("acc accuracy: ${payload?.accelerometerAccuracy ?: "N/A"}\n")
+        sb.append("gyro accuracy: ${payload?.gyroscopeAccuracy ?: "N/A"}\n")
+        sb.append("rotation accuracy: ${payload?.rotationAccuracy ?: "N/A"}")
         
-        // INTERPRETATION
-        val interp = SpannableStringBuilder()
-        val calib = "SENSORES OK" // Simplified - could check accuracy if exposed
-        interp.append("Calibration: $calib\n", ForegroundColorSpan(Color.GREEN), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
+        imuRawData.text = sb.toString()
         
-        val fps = p?.imuFpsEffective ?: 0.0
-        val rate = if (fps >= 100) Pair("RATE OK", Color.GREEN) else Pair("RATE BAIXO", Color.YELLOW)
-        interp.append("Data rate: ${rate.first}", ForegroundColorSpan(rate.second), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
-        imuInterpText.text = interp
+        // Interpretations
+        val calibStatus = calculateCalibStatus(payload)
+        imuCalibStatus.text = "Calibration: ${calibStatus.first}"
+        imuCalibStatus.setTextColor(calibStatus.second)
+        
+        val dataRate = calculateDataRate(payload)
+        imuDataRate.text = "Data rate: ${dataRate.first}"
+        imuDataRate.setTextColor(dataRate.second)
     }
     
     private fun updateBaroCard(state: TelemetryUiState) {
-        val p = state.lastPayload
+        val payload = state.lastPayload
+        val sb = SpannableStringBuilder()
         
-        // Check if we have valid data
-        val hasPressure = p?.baroPressureHpa != null
-        val hasAltitude = p?.baroAltitudeMeters != null
-        val hasData = hasPressure || hasAltitude
+        sb.append("pressure: ${payload?.baroPressureHpa?.let { "%.1f".format(it) } ?: "N/A"} hPa\n")
+        sb.append("altitude: ${payload?.baroAltitudeMeters?.let { "%.1f".format(it) } ?: "N/A"} m")
         
-        // Toggle visibility
-        val baroCard = findViewById<View>(R.id.barometerCardRoot)
-        baroCard.visibility = if (hasData) View.VISIBLE else View.GONE
+        baroRawData.text = sb.toString()
         
-        if (!hasData) return
+        // Hide card if no valid data
+        val baroValid = (payload?.baroPressureHpa != null || payload?.baroAltitudeMeters != null)
+        val baroCard = findViewById<View>(R.id.card_baro)
+        baroCard?.visibility = if (baroValid) View.VISIBLE else View.GONE
         
-        // RAW DATA
-        val raw = StringBuilder()
-        raw.append("pressure: ${p?.baroPressureHpa?.let { "%.1f".format(it) } ?: "N/A"} hPa\n")
-        raw.append("altitude: ${p?.baroAltitudeMeters?.let { "%.1f".format(it) } ?: "N/A"} m")
-        baroRawText.text = raw.toString()
-        
-        // INTERPRETATION
-        val interp = SpannableStringBuilder()
-        val status = if (hasData) Pair("sensor OK", Color.GREEN) else Pair("sem barômetro", Color.GRAY)
-        interp.append("Status: ${status.first}", ForegroundColorSpan(status.second), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
-        baroInterpText.text = interp
+        // Interpretation
+        val statusText = if (baroValid) "sensor OK" else "sem barômetro no hardware"
+        baroStatus.text = "Status: $statusText"
+        baroStatus.setTextColor(if (baroValid) Color.GREEN else Color.GRAY)
     }
     
     private fun updateNetworkCard(state: TelemetryUiState) {
-        // RAW DATA
-        val raw = StringBuilder()
-        raw.append("mqttStatus: ${state.mqttStatus}\n")
-        raw.append("serviceRunning: ${state.isServiceRunning}\n")
-        raw.append("offlineQueueCount: TODO\n")
-        raw.append("offlineQueueSizeMB: TODO\n")
-        raw.append("brokerEndpoints: TODO")
-        networkRawText.text = raw.toString()
+        val sb = SpannableStringBuilder()
         
-        // INTERPRETATION
-        val interp = SpannableStringBuilder()
-        val delivery = if (state.mqttStatus == "Connected") {
-            Pair("ENVIANDO EM TEMPO REAL", Color.GREEN)
-        } else {
-            Pair("ARMAZENANDO OFFLINE", Color.YELLOW)
+        sb.append("mqttStatus: ${state.mqttStatus}\n")
+        sb.append("serviceRunning: ${state.isServiceRunning}\n")
+        sb.append("offlineQueueCount: TODO\n")
+        sb.append("offlineQueueSizeMB: TODO\n")
+        sb.append("brokerEndpoints: TODO\n")
+        sb.append("permissions:\n")
+        sb.append("  - background location: TODO\n")
+        sb.append("  - battery optimization: TODO\n")
+        sb.append("  - notifications: TODO")
+        
+        networkRawData.text = sb.toString()
+        
+        // Interpretations
+        val deliveryStatus = calculateDeliveryStatus(state)
+        networkDeliveryStatus.text = "Delivery: ${deliveryStatus.first}"
+        networkDeliveryStatus.setTextColor(deliveryStatus.second)
+        
+        networkOperatorSync.text = "Operator sync: TODO"
+    }
+    
+    // ===== INTERPRETATION CALCULATORS =====
+    
+    private fun calculateLoggerStatus(state: TelemetryUiState): String {
+        if (!state.isServiceRunning) return "STOPPED"
+        return when {
+            state.mqttStatus.contains("connected", ignoreCase = true) -> "OK"
+            else -> "DEGRADED"
         }
-        interp.append("Delivery: ${delivery.first}\n", ForegroundColorSpan(delivery.second), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+    
+    private fun getLoggerStatusColor(status: String): Int = when (status) {
+        "OK" -> Color.GREEN
+        "DEGRADED" -> Color.rgb(255, 165, 0) // Orange
+        "STOPPED" -> Color.RED
+        else -> Color.GRAY
+    }
+    
+    private fun calculateDataAge(tsEpoch: Long?): Pair<String, Int> {
+        if (tsEpoch == null || tsEpoch == 0L) {
+            return Pair("Data age: N/A", Color.GRAY)
+        }
+        val ageSeconds = (System.currentTimeMillis() - tsEpoch) / 1000.0
+        val label = when {
+            ageSeconds < 5 -> "fresh"
+            ageSeconds < 30 -> "stale"
+            else -> "very stale"
+        }
+        val color = when {
+            ageSeconds < 5 -> Color.GREEN
+            ageSeconds < 30 -> Color.rgb(255, 165, 0) // Orange
+            else -> Color.RED
+        }
+        return Pair("Data age: ${"%.1f".format(ageSeconds)} s ($label)", color)
+    }
+    
+    private fun calculatePosQuality(payload: com.example.sensorlogger.model.TelemetryPayloadV11?): Pair<String, Int> {
+        val acc = payload?.accuracyMeters ?: Float.MAX_VALUE
+        val hdop = payload?.hdop ?: Float.MAX_VALUE
+        val sats = payload?.satellitesUsed ?: 0
         
-        interp.append("Operator sync: TODO", ForegroundColorSpan(Color.LTGRAY), SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
-        networkInterpText.text = interp
+        return when {
+            acc < 5 && hdop < 2 && sats >= 7 -> Pair("OK", Color.GREEN)
+            acc < 15 || hdop < 4 -> Pair("WARN", Color.rgb(255, 165, 0))
+            else -> Pair("BAD", Color.RED)
+        }
+    }
+    
+    private fun calculateSignalEnv(cn0Avg: Float?): String {
+        return when {
+            cn0Avg == null -> "N/A"
+            cn0Avg > 30 -> "céu aberto bom"
+            cn0Avg >= 20 -> "parcial bloqueado"
+            else -> "sombra / degradado"
+        }
+    }
+    
+    private fun calculateMotionState(payload: com.example.sensorlogger.model.TelemetryPayloadV11?): String {
+        val speed = payload?.speed ?: 0f
+        val dopplerSigma = payload?.gnssRaw?.dopplerSpeedSigma ?: 0.0
+        
+        return when {
+            speed < 0.5f && dopplerSigma > 2.0 -> "ruído alto"
+            speed < 0.5f -> "parado"
+            else -> "movendo"
+        }
+    }
+    
+    private fun calculateGnssHealth(payload: com.example.sensorlogger.model.TelemetryPayloadV11?): Pair<String, Int> {
+        val satAge = payload?.gnssRaw?.satUpdateAgeMs ?: Long.MAX_VALUE
+        val sats = payload?.satellitesUsed ?: 0
+        
+        return when {
+            satAge < 1500 && sats >= 4 -> Pair("OK", Color.GREEN)
+            else -> Pair("PERDENDO FIX", Color.RED)
+        }
+    }
+    
+    private fun calculateImpactSeverity(payload: com.example.sensorlogger.model.TelemetryPayloadV11?): Pair<String, Int> {
+        val accVert = payload?.accVerticalMps2 ?: 0f
+        val shockLevel = payload?.motionShockLevel ?: ""
+        
+        return when {
+            abs(accVert) > 1.5 || shockLevel == "high" -> Pair("IMPACTO FORTE", Color.RED)
+            abs(accVert) > 0.5 -> Pair("IMPACTO MEDIO", Color.rgb(255, 165, 0))
+            else -> Pair("OK", Color.GREEN)
+        }
+    }
+    
+    private fun calculateCurveAggression(payload: com.example.sensorlogger.model.TelemetryPayloadV11?): Pair<String, Int> {
+        val accLat = payload?.accLateralMps2 ?: 0f
+        val speed = payload?.speed ?: 0f
+        
+        return when {
+            abs(accLat) > 1.5 && speed > 5 -> Pair("CURVA AGRESSIVA", Color.RED)
+            else -> Pair("NORMAL", Color.GREEN)
+        }
+    }
+    
+    private fun calculateBrakeAccel(payload: com.example.sensorlogger.model.TelemetryPayloadV11?): Pair<String, Int> {
+        val accLong = payload?.accLongitudinalMps2 ?: 0f
+        
+        return when {
+            accLong < -1.5 -> Pair("FREADA FORTE", Color.RED)
+            accLong > 1.5 -> Pair("ACELERAÇÃO FORTE", Color.rgb(255, 165, 0))
+            else -> Pair("OK", Color.GREEN)
+        }
+    }
+    
+    private fun calculateRollRisk(payload: com.example.sensorlogger.model.TelemetryPayloadV11?): Pair<String, Int> {
+        val roll = payload?.vehicleTiltRollDeg ?: 0f
+        
+        return when {
+            abs(roll) > 15 -> Pair("ALERTA TOMBAMENTO", Color.RED)
+            abs(roll) > 8 -> Pair("Inclinação Alta", Color.rgb(255, 165, 0))
+            else -> Pair("Estável", Color.GREEN)
+        }
+    }
+    
+    private fun calculateStability(payload: com.example.sensorlogger.model.TelemetryPayloadV11?): String {
+        val stationary = payload?.motionStationary ?: false
+        val speed = payload?.speed ?: 0f
+        val accVert = payload?.accVerticalMps2 ?: 0f
+        
+        return when {
+            stationary -> "PARADO"
+            speed < 0.5f && abs(accVert) > 0.5 -> "VIBRANDO PARADO"
+            else -> "MOVIMENTO"
+        }
+    }
+    
+    private fun calculateCalibStatus(payload: com.example.sensorlogger.model.TelemetryPayloadV11?): Pair<String, Int> {
+        val accAcc = payload?.accelerometerAccuracy ?: ""
+        val gyroAcc = payload?.gyroscopeAccuracy ?: ""
+        val rotAcc = payload?.rotationAccuracy ?: ""
+        
+        val allHigh = accAcc == "high" && gyroAcc == "high" && rotAcc == "high"
+        
+        return if (allHigh) {
+            Pair("SENSORES OK", Color.GREEN)
+        } else {
+            Pair("CALIBRAR", Color.rgb(255, 165, 0))
+        }
+    }
+    
+    private fun calculateDataRate(payload: com.example.sensorlogger.model.TelemetryPayloadV11?): Pair<String, Int> {
+        val fps = payload?.imuFpsEffective ?: 0f
+        val samples = payload?.imuSamples ?: 0
+        
+        return when {
+            fps >= 100 && samples >= 100 -> Pair("RATE OK", Color.GREEN)
+            else -> Pair("RATE BAIXO (ENERGY SAVE?)", Color.rgb(255, 165, 0))
+        }
+    }
+    
+    private fun calculateDeliveryStatus(state: TelemetryUiState): Pair<String, Int> {
+        return when {
+            state.mqttStatus.contains("connected", ignoreCase = true) -> 
+                Pair("ENVIANDO EM TEMPO REAL", Color.GREEN)
+            state.isServiceRunning -> 
+                Pair("ARMAZENANDO OFFLINE", Color.rgb(255, 165, 0))
+            else -> 
+                Pair("SEM PERMISSÃO (LOCALIZAÇÃO BLOQUEADA)", Color.RED)
+        }
     }
 }
-
