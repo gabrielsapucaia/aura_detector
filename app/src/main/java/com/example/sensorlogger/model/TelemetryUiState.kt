@@ -119,7 +119,10 @@ data class TelemetryUiState(
     val magnetometerZSigma: Float? = null,
     val magnetometerFieldStrength: Float? = null,
     val lastPayloadJson: String? = null,
-    val lastPayload: TelemetryPayloadV11? = null
+    val lastPayload: TelemetryPayloadV11? = null,
+    val offlineQueueSizeMB: Float? = null,
+    val batteryOptimizationIgnored: Boolean? = null,
+    val notificationPermissionGranted: Boolean? = null
 ) {
     val isServiceRunning: Boolean get() = serviceRunning
     val mqttStatus: String get() = when {

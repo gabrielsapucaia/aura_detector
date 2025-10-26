@@ -245,13 +245,24 @@ class DebugDashboardActivity : AppCompatActivity() {
         // Network / Upload (fundido aqui)
         ssb.appendColored("[REDE / ENVIO]\n", colorHighlight, true)
         ssb.appendNormal("mqttStatus: ${state.mqttStatus} | serviceRunning: ${state.isServiceRunning}\n")
-        ssb.appendNormal("offlineQueueCount: ${state.queueSize} | offlineQueueSizeMB: N/A\n")
+        val queueSizeMBStr = state.offlineQueueSizeMB?.let { "%.2f MB".format(it) } ?: "N/A"
+        ssb.appendNormal("offlineQueueCount: ${state.queueSize} | offlineQueueSizeMB: $queueSizeMBStr\n")
         ssb.appendNormal("brokerEndpoints: ${state.brokerActiveEndpoint ?: "N/A"}\n\n")
         
         ssb.appendNormal("Permissões:\n")
         ssb.appendNormal("  background location: ${if (state.permissionsGranted) "OK" else "FALTA"}\n")
-        ssb.appendNormal("  battery optimization: N/A\n")
-        ssb.appendNormal("  notifications: N/A\n\n")
+        val batteryOptStatus = when (state.batteryOptimizationIgnored) {
+            true -> "OK"
+            false -> "ATENÇÃO"
+            null -> "N/A"
+        }
+        val notificationStatus = when (state.notificationPermissionGranted) {
+            true -> "OK"
+            false -> "FALTA"
+            null -> "N/A"
+        }
+        ssb.appendNormal("  battery optimization: $batteryOptStatus\n")
+        ssb.appendNormal("  notifications: $notificationStatus\n\n")
         
         ssb.appendColored("Conclusão envio:\n", colorHighlight, true)
         val deliveryStatus = if (state.mqttStatus == "Connected" && state.queueSize == 0) {

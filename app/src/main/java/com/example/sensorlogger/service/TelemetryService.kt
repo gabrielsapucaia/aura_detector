@@ -13,7 +13,9 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -123,7 +125,8 @@ class TelemetryService : LifecycleService() {
         serviceScope.launch {
             offlineQueue.initialize()
             val size = offlineQueue.size()
-            TelemetryStateStore.update { state -> state.copy(queueSize = size) }
+            val sizeMB = offlineQueue.sizeInMB()
+            TelemetryStateStore.update { state -> state.copy(queueSize = size, offlineQueueSizeMB = sizeMB) }
             if (size > 0) {
                 drainTrigger.trySend(Unit)
             }
@@ -173,7 +176,8 @@ class TelemetryService : LifecycleService() {
                 drainTrigger.trySend(Unit)
                 serviceScope.launch {
                     val size = offlineQueue.size()
-                    TelemetryStateStore.update { state -> state.copy(queueSize = size) }
+                    val sizeMB = offlineQueue.sizeInMB()
+                    TelemetryStateStore.update { state -> state.copy(queueSize = size, offlineQueueSizeMB = sizeMB) }
                 }
             }
             ACTION_RECONNECT -> {
@@ -225,16 +229,38 @@ class TelemetryService : LifecycleService() {
         startForeground(NOTIFICATION_ID, buildNotification(initial = true))
         imuAggregator.start()
         gnssManager.start(nmeaEnabled)
+        
+        val batteryOptIgnored = checkBatteryOptimization()
+        val notificationPerm = checkNotificationPermission()
+        
         TelemetryStateStore.update { state ->
             state.copy(
                 serviceRunning = true,
                 operatorId = operatorId,
                 operatorName = operatorName,
-                equipmentTag = equipmentTag
+                equipmentTag = equipmentTag,
+                batteryOptimizationIgnored = batteryOptIgnored,
+                notificationPermissionGranted = notificationPerm
             )
         }
         serviceScope.launch { telemetryLoop() }
         drainTrigger.trySend(Unit)
+    }
+
+    private fun checkBatteryOptimization(): Boolean {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            powerManager.isIgnoringBatteryOptimizations(packageName)
+        } else true
+    }
+
+    private fun checkNotificationPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        } else true
     }
 
     private fun hasLocationPermission(): Boolean {
@@ -412,6 +438,7 @@ class TelemetryService : LifecycleService() {
             val lastSnapshotBytes = payloadJson.toByteArray(StandardCharsets.UTF_8)
             schedulePublish(payloadV11, lastSnapshotBytes)
             val queueSize = offlineQueue.size()
+            val queueSizeMB = offlineQueue.sizeInMB()
 
             val location = gnssSnapshot.location
             TelemetryStateStore.update { state ->
@@ -421,6 +448,7 @@ class TelemetryService : LifecycleService() {
                     equipmentTag = equipmentTag,
                     sequence = seq,
                     queueSize = queueSize,
+                    offlineQueueSizeMB = queueSizeMB,
                     lastLatitude = location?.latitude?.toFloat(),
                     lastLongitude = location?.longitude?.toFloat(),
                     lastSpeed = location?.speed?.toFloat(),
@@ -574,7 +602,8 @@ class TelemetryService : LifecycleService() {
                 }
             }
             val queueSize = offlineQueue.size()
-            TelemetryStateStore.update { state -> state.copy(queueSize = queueSize) }
+            val queueSizeMB = offlineQueue.sizeInMB()
+            TelemetryStateStore.update { state -> state.copy(queueSize = queueSize, offlineQueueSizeMB = queueSizeMB) }
         }
     }
 
@@ -582,7 +611,8 @@ class TelemetryService : LifecycleService() {
         var backoff = DRAIN_MIN_BACKOFF_MS
         while (serviceScope.isActive) {
             val outcome = drainOfflineBatch()
-            TelemetryStateStore.update { state -> state.copy(queueSize = outcome.remaining) }
+            val queueSizeMB = offlineQueue.sizeInMB()
+            TelemetryStateStore.update { state -> state.copy(queueSize = outcome.remaining, offlineQueueSizeMB = queueSizeMB) }
             if (outcome.remaining == 0) {
                 backoff = DRAIN_MIN_BACKOFF_MS
                 if (waitForDrainTrigger(DRAIN_IDLE_INTERVAL_MS)) {
