@@ -1,80 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:layout_width="0dp"
+    android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_columnWeight="1"
     android:layout_margin="4dp"
-    app:cardBackgroundColor="#2C2C2C"
-    app:cardCornerRadius="8dp"
-    app:cardElevation="4dp">
+    android:backgroundTint="#1C1C1C">
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="12dp">
+        android:padding="6dp">
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="VEHICLE DYNAMICS"
-            android:textColor="#FFFFFF"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            android:paddingBottom="8dp"/>
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="RAW DATA"
-            android:textColor="#B0B0B0"
-            android:textStyle="bold"
+            android:textColor="#00BFFF"
             android:textSize="11sp"
+            android:textStyle="bold"
             android:paddingBottom="4dp"/>
         <TextView
             android:id="@+id/vehicle_rawData"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
-            android:textColor="#E0E0E0"
-            android:textSize="10sp"
-            android:paddingBottom="8dp"
+            android:textColor="#EAEAEA"
+            android:textSize="8sp"
+            android:lineSpacingExtra="1dp"
             android:text="Loading..."/>
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="INTERPRETATION"
-            android:textColor="#B0B0B0"
-            android:textStyle="bold"
-            android:textSize="11sp"
-            android:paddingBottom="4dp"/>
-        <TextView
-            android:id="@+id/vehicle_impactSeverityText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="10sp"
-            android:text="Impact: --"/>
-        <TextView
-            android:id="@+id/vehicle_curveAggressivenessText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="10sp"
-            android:text="Curve: --"/>
-        <TextView
-            android:id="@+id/vehicle_brakeAccelText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="10sp"
-            android:text="Brake/Accel: --"/>
-        <TextView
-            android:id="@+id/vehicle_rollRiskText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="10sp"
-            android:text="Roll risk: --"/>
-        <TextView
-            android:id="@+id/vehicle_stabilityText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="10sp"
-            android:text="Stability: --"/>
     </LinearLayout>
 </androidx.cardview.widget.CardView>
