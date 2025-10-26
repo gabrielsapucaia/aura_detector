@@ -2,7 +2,7 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#0D0D0D"
+    android:background="@color/debug_bg_global"
     android:fillViewport="false">
 
     <LinearLayout
@@ -11,16 +11,207 @@
         android:orientation="vertical"
         android:padding="8dp">
 
+        <!-- Global Header -->
         <TextView
-            android:id="@+id/debug_full_content"
+            android:id="@+id/debug_header"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
-            android:textColor="#E0E0E0"
+            android:textColor="@color/debug_text_label"
             android:textSize="9sp"
-            android:lineSpacingExtra="2dp"
+            android:padding="4dp"
+            android:text="Última atualização: --:--:-- | taxa: 1 Hz | mqtt: --"/>
+
+        <!-- CARD 1 -->
+        <FrameLayout
+            android:id="@+id/card1_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="8dp"
+            android:background="@color/debug_card_bg_1"
             android:padding="8dp"
-            android:text="Aguardando dados de telemetria..."/>
+            android:elevation="1dp">
+            <TextView
+                android:id="@+id/card1_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/debug_text_primary"
+                android:textSize="9sp"
+                android:lineSpacingExtra="2dp"/>
+        </FrameLayout>
+
+        <!-- CARD 2 -->
+        <FrameLayout
+            android:id="@+id/card2_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:background="@color/debug_card_bg_2"
+            android:padding="8dp"
+            android:elevation="1dp">
+            <TextView
+                android:id="@+id/card2_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/debug_text_primary"
+                android:textSize="9sp"
+                android:lineSpacingExtra="2dp"/>
+        </FrameLayout>
+
+        <!-- CARD 3 -->
+        <FrameLayout
+            android:id="@+id/card3_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:background="@color/debug_card_bg_1"
+            android:padding="8dp"
+            android:elevation="1dp">
+            <TextView
+                android:id="@+id/card3_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/debug_text_primary"
+                android:textSize="9sp"
+                android:lineSpacingExtra="2dp"/>
+        </FrameLayout>
+
+        <!-- CARD 4 -->
+        <FrameLayout
+            android:id="@+id/card4_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:background="@color/debug_card_bg_2"
+            android:padding="8dp"
+            android:elevation="1dp">
+            <TextView
+                android:id="@+id/card4_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/debug_text_primary"
+                android:textSize="9sp"
+                android:lineSpacingExtra="2dp"/>
+        </FrameLayout>
+
+        <!-- CARD 5 -->
+        <FrameLayout
+            android:id="@+id/card5_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:background="@color/debug_card_bg_1"
+            android:padding="8dp"
+            android:elevation="1dp">
+            <TextView
+                android:id="@+id/card5_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/debug_text_primary"
+                android:textSize="9sp"
+                android:lineSpacingExtra="2dp"/>
+        </FrameLayout>
+
+        <!-- CARD 6 -->
+        <FrameLayout
+            android:id="@+id/card6_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:background="@color/debug_card_bg_2"
+            android:padding="8dp"
+            android:elevation="1dp">
+            <TextView
+                android:id="@+id/card6_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/debug_text_primary"
+                android:textSize="9sp"
+                android:lineSpacingExtra="2dp"/>
+        </FrameLayout>
+
+        <!-- CARD 7 -->
+        <FrameLayout
+            android:id="@+id/card7_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:background="@color/debug_card_bg_1"
+            android:padding="8dp"
+            android:elevation="1dp">
+            <TextView
+                android:id="@+id/card7_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/debug_text_primary"
+                android:textSize="9sp"
+                android:lineSpacingExtra="2dp"/>
+        </FrameLayout>
+
+        <!-- CARD 8 -->
+        <FrameLayout
+            android:id="@+id/card8_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:background="@color/debug_card_bg_2"
+            android:padding="8dp"
+            android:elevation="1dp">
+            <TextView
+                android:id="@+id/card8_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/debug_text_primary"
+                android:textSize="9sp"
+                android:lineSpacingExtra="2dp"/>
+        </FrameLayout>
+
+        <!-- CARD 9 -->
+        <FrameLayout
+            android:id="@+id/card9_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:background="@color/debug_card_bg_1"
+            android:padding="8dp"
+            android:elevation="1dp">
+            <TextView
+                android:id="@+id/card9_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/debug_text_primary"
+                android:textSize="9sp"
+                android:lineSpacingExtra="2dp"/>
+        </FrameLayout>
+
+        <!-- CARD RAW GNSS -->
+        <FrameLayout
+            android:id="@+id/cardRawGnss_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:background="@color/debug_card_bg_2"
+            android:padding="8dp"
+            android:elevation="1dp">
+            <TextView
+                android:id="@+id/cardRawGnss_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/debug_text_primary"
+                android:textSize="9sp"
+                android:lineSpacingExtra="2dp"/>
+        </FrameLayout>
 
     </LinearLayout>
 </ScrollView>

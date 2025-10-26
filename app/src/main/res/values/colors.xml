@@ -16,4 +16,14 @@
     <color name="status_disconnected">#9AA0A6</color>
     <color name="status_failed">#EA4335</color>
     <color name="status_disabled">#BDC1C6</color>
+    
+    <color name="debug_bg_global">#121212</color>
+    <color name="debug_card_bg_1">#181818</color>
+    <color name="debug_card_bg_2">#202020</color>
+    <color name="debug_card_border">#404040</color>
+    <color name="debug_text_primary">#E0E0E0</color>
+    <color name="debug_text_highlight">#64B5F6</color>
+    <color name="debug_text_muted">#666666</color>
+    <color name="debug_text_label">#AAAAAA</color>
+    <color name="debug_divider">#888888</color>
 </resources>
