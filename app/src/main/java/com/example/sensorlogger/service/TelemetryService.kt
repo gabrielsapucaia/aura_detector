@@ -135,7 +135,7 @@ class TelemetryService : LifecycleService() {
         queueMonitorJob = serviceScope.launch {
             while (isActive) {
                 try {
-                    val count = offlineQueue.size()
+                    val count = offlineQueue.countActualMessages()
                     val sizeMB = offlineQueue.sizeInMB()
                     TelemetryStateStore.update {
                         it.copy(queueSize = count, offlineQueueSizeMB = sizeMB)
@@ -143,7 +143,7 @@ class TelemetryService : LifecycleService() {
                 } catch (e: Exception) {
                     Timber.w(e, "Queue monitor update failed")
                 }
-                delay(2000L)
+                delay(1000L)
             }
         }
         serviceScope.launch {

@@ -114,6 +114,21 @@ class OfflineQueue(context: Context) {
 
     fun size(): Int = queueSize.get()
 
+    fun countActualMessages(): Int {
+        return try {
+            telemetryDir.listFiles()
+                ?.filter { it.name.startsWith(PENDING_PREFIX) && it.name.endsWith(SUFFIX) }
+                ?.sumOf { file ->
+                    file.takeIf { it.isFile }?.bufferedReader()?.use { reader ->
+                        reader.lineSequence().count { it.isNotBlank() }
+                    } ?: 0
+                } ?: 0
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to count queue messages")
+            queueSize.get()
+        }
+    }
+
     fun sizeInMB(): Float {
         val totalBytes = telemetryDir.listFiles()
             ?.filter { it.name.startsWith(PENDING_PREFIX) && it.name.endsWith(SUFFIX) }
