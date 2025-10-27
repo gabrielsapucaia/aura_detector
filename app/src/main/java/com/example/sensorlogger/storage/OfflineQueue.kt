@@ -92,24 +92,25 @@ class OfflineQueue(context: Context) {
         batchSize: Int,
         publish: suspend (QueuedMessage) -> Map<String, Boolean>
     ): DrainOutcome {
-        return mutex.withLock {
+        val files = mutex.withLock {
             withContext(Dispatchers.IO) {
                 purgeExpiredLocked()
             }
             if (queueSize.get() == 0) {
-                return@withLock DrainOutcome(processed = 0, remaining = queueSize.get())
+                return DrainOutcome(processed = 0, remaining = queueSize.get())
             }
-            var remainingBudget = batchSize
-            var processedTotal = 0
-            val files = queueFilesSorted()
-            for (file in files) {
-                if (remainingBudget <= 0) break
-                val processed = processFileLocked(file, remainingBudget, publish)
-                processedTotal += processed
-                remainingBudget -= processed
-            }
-            DrainOutcome(processed = processedTotal, remaining = queueSize.get())
+            queueFilesSorted()
         }
+        
+        var remainingBudget = batchSize
+        var processedTotal = 0
+        for (file in files) {
+            if (remainingBudget <= 0) break
+            val processed = processFileLocked(file, remainingBudget, publish)
+            processedTotal += processed
+            remainingBudget -= processed
+        }
+        return DrainOutcome(processed = processedTotal, remaining = queueSize.get())
     }
 
     fun size(): Int = queueSize.get()
@@ -147,12 +148,14 @@ class OfflineQueue(context: Context) {
         publish: suspend (QueuedMessage) -> Map<String, Boolean>
     ): Int {
         if (budget <= 0) return 0
-        var processed = 0
-        val tempFile = File(file.parentFile, "${file.name}.tmp")
-
-        withContext(Dispatchers.IO) {
-            BufferedWriter(FileWriter(tempFile, false)).use { writer ->
+        
+        val messagesToProcess = mutableListOf<Pair<String, QueuedMessage>>()
+        val messagesToKeep = mutableListOf<String>()
+        
+        mutex.withLock {
+            withContext(Dispatchers.IO) {
                 file.bufferedReader().useLines { lines ->
+                    var processedCount = 0
                     lines.forEach { line ->
                         if (line.isBlank()) return@forEach
                         val message = runCatching { json.decodeFromString<QueuedMessage>(line) }.getOrElse {
@@ -160,43 +163,64 @@ class OfflineQueue(context: Context) {
                             decrementQueue()
                             return@forEach
                         }
-                        if (processed < budget) {
-                            processed += 1
-                            val results = publish(message)
-                            val remaining = message.targets.filter { results[it] != true }.toSet()
-                            if (remaining.isEmpty()) {
-                                decrementQueue()
-                            } else {
-                                val updated = message.copy(
-                                    targets = remaining.toList(),
-                                    attempts = message.attempts + 1,
-                                    lastError = "retry_failed"
-                                )
-                                writer.append(json.encodeToString(updated))
-                                writer.append('\n')
-                            }
+                        if (processedCount < budget) {
+                            messagesToProcess.add(line to message)
+                            processedCount++
                         } else {
-                            writer.append(line)
-                            writer.append('\n')
+                            messagesToKeep.add(line)
                         }
                     }
                 }
             }
         }
-
-        withContext(Dispatchers.IO) {
-            if (!tempFile.exists() || tempFile.length() == 0L) {
-                tempFile.delete()
-                file.delete()
-            } else {
-                if (!file.delete()) {
-                    Timber.w("Failed to delete original queue file %s", file.name)
-                }
-                if (!tempFile.renameTo(file)) {
-                    Timber.w("Failed to replace queue file %s", file.name)
-                }
+        
+        var processed = 0
+        val resultsToWrite = mutableListOf<String>()
+        
+        for ((originalLine, message) in messagesToProcess) {
+            processed++
+            val results = publish(message)
+            val remaining = message.targets.filter { results[it] != true }.toSet()
+            if (remaining.isNotEmpty()) {
+                val updated = message.copy(
+                    targets = remaining.toList(),
+                    attempts = message.attempts + 1,
+                    lastError = "retry_failed"
+                )
+                resultsToWrite.add(json.encodeToString(updated))
             }
-            Unit
+        }
+        
+        mutex.withLock {
+            withContext(Dispatchers.IO) {
+                val tempFile = File(file.parentFile, "${file.name}.tmp")
+                BufferedWriter(FileWriter(tempFile, false)).use { writer ->
+                    resultsToWrite.forEach { line ->
+                        writer.append(line)
+                        writer.append('\n')
+                    }
+                    messagesToKeep.forEach { line ->
+                        writer.append(line)
+                        writer.append('\n')
+                    }
+                }
+                
+                val successfullyProcessed = messagesToProcess.size - resultsToWrite.size
+                decrementQueue(successfullyProcessed)
+                
+                if (!tempFile.exists() || tempFile.length() == 0L) {
+                    tempFile.delete()
+                    file.delete()
+                } else {
+                    if (!file.delete()) {
+                        Timber.w("Failed to delete original queue file %s", file.name)
+                    }
+                    if (!tempFile.renameTo(file)) {
+                        Timber.w("Failed to replace queue file %s", file.name)
+                    }
+                }
+                Unit
+            }
         }
 
         return min(processed, budget)

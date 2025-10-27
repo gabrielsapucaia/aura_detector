@@ -608,14 +608,18 @@ class TelemetryService : LifecycleService() {
                 Timber.w("MQTT publish timed out for seq=%d", payload.sequenceId)
             }
             val enabledTargets = mqttPublisher.enabledLabels()
+            android.util.Log.i("TelemetryService", "Enabled targets: $enabledTargets")
             val failedTargets = if (publishResults == null) {
                 enabledTargets
             } else {
                 enabledTargets.filter { publishResults[it] != true }.toSet()
             }
+            android.util.Log.i("TelemetryService", "Failed targets for seq=${payload.sequenceId}: $failedTargets (size=${failedTargets.size})")
             if (failedTargets.isNotEmpty()) {
                 val errorTag = if (publishResults == null) "publish_timeout" else "publish_failed"
+                android.util.Log.i("TelemetryService", "Calling enqueue for seq=${payload.sequenceId}...")
                 val stored = offlineQueue.enqueue(payload, failedTargets, errorTag)
+                android.util.Log.i("TelemetryService", "Enqueue completed: stored=$stored")
                 if (stored) {
                     drainTrigger.trySend(Unit)
                     val queueSize = offlineQueue.size()
@@ -624,6 +628,8 @@ class TelemetryService : LifecycleService() {
                 } else {
                     Timber.w("Offline queue drop for seq=%d: daily limit reached", payload.sequenceId)
                 }
+            } else {
+                android.util.Log.i("TelemetryService", "No failed targets for seq=${payload.sequenceId}, skipping enqueue")
             }
         }
     }
