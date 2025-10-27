@@ -130,6 +130,15 @@ class OfflineQueue(context: Context) {
         }
     }
 
+    suspend fun recalculateSize() {
+        val actual = withContext(Dispatchers.IO) { countActualMessages() }
+        val current = queueSize.get()
+        if (actual != current) {
+            Timber.i("Queue size mismatch: cached=$current, actual=$actual. Recalculating...")
+            queueSize.set(actual)
+        }
+    }
+
     fun sizeInMB(): Float {
         val totalBytes = telemetryDir.listFiles()
             ?.filter { it.name.startsWith(PENDING_PREFIX) && it.name.endsWith(SUFFIX) }
@@ -194,21 +203,25 @@ class OfflineQueue(context: Context) {
         mutex.withLock {
             withContext(Dispatchers.IO) {
                 val tempFile = File(file.parentFile, "${file.name}.tmp")
-                BufferedWriter(FileWriter(tempFile, false)).use { writer ->
-                    resultsToWrite.forEach { line ->
-                        writer.append(line)
-                        writer.append('\n')
-                    }
-                    messagesToKeep.forEach { line ->
-                        writer.append(line)
-                        writer.append('\n')
+                val shouldKeepFile = resultsToWrite.isNotEmpty() || messagesToKeep.isNotEmpty()
+                
+                if (shouldKeepFile) {
+                    BufferedWriter(FileWriter(tempFile, false)).use { writer ->
+                        resultsToWrite.forEach { line ->
+                            writer.append(line)
+                            writer.append('\n')
+                        }
+                        messagesToKeep.forEach { line ->
+                            writer.append(line)
+                            writer.append('\n')
+                        }
                     }
                 }
                 
                 val successfullyProcessed = messagesToProcess.size - resultsToWrite.size
                 decrementQueue(successfullyProcessed)
                 
-                if (!tempFile.exists() || tempFile.length() == 0L) {
+                if (!shouldKeepFile || !tempFile.exists() || tempFile.length() == 0L) {
                     tempFile.delete()
                     file.delete()
                 } else {

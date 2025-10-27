@@ -135,8 +135,15 @@ class TelemetryService : LifecycleService() {
             // Start queue monitor AFTER initialization
             queueMonitorJob = launch {
                 android.util.Log.i("TelemetryService", "Queue monitor job STARTED, updating every 5 seconds")
+                var cycleCount = 0
                 while (isActive) {
                     try {
+                        // Every 12 cycles (60 seconds), recalculate to detect drift
+                        if (cycleCount % 12 == 0) {
+                            offlineQueue.recalculateSize()
+                        }
+                        cycleCount++
+                        
                         val count = offlineQueue.size()
                         val sizeMB = offlineQueue.sizeInMB()
                         android.util.Log.i("TelemetryService", "Queue monitor: count=$count, sizeMB=${"%.2f".format(sizeMB)}")
