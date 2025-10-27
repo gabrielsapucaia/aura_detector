@@ -131,19 +131,24 @@ class TelemetryService : LifecycleService() {
             if (size > 0) {
                 drainTrigger.trySend(Unit)
             }
-        }
-        queueMonitorJob = serviceScope.launch {
-            while (isActive) {
-                try {
-                    val count = offlineQueue.countActualMessages()
-                    val sizeMB = offlineQueue.sizeInMB()
-                    TelemetryStateStore.update {
-                        it.copy(queueSize = count, offlineQueueSizeMB = sizeMB)
+            
+            // Start queue monitor AFTER initialization
+            queueMonitorJob = launch {
+                android.util.Log.i("TelemetryService", "Queue monitor job STARTED, updating every 1 second")
+                while (isActive) {
+                    try {
+                        val count = offlineQueue.countActualMessages()
+                        val sizeMB = offlineQueue.sizeInMB()
+                        android.util.Log.i("TelemetryService", "Queue monitor: count=$count, sizeMB=${"%.2f".format(sizeMB)}")
+                        TelemetryStateStore.update {
+                            it.copy(queueSize = count, offlineQueueSizeMB = sizeMB)
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("TelemetryService", "Queue monitor update failed", e)
                     }
-                } catch (e: Exception) {
-                    Timber.w(e, "Queue monitor update failed")
+                    delay(1000L)
                 }
-                delay(1000L)
+                android.util.Log.i("TelemetryService", "Queue monitor job STOPPED")
             }
         }
         serviceScope.launch {
