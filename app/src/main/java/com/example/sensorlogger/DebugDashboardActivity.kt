@@ -101,7 +101,6 @@ class DebugDashboardActivity : AppCompatActivity() {
     
     private fun updateUI(state: TelemetryUiState) {
         try {
-            Timber.d("Dashboard updateUI: queue=${state.queueSize}, mqtt=${state.mqttStatus}")
             updateHeader(state)
             updateCards(state)
         } catch (e: Exception) {

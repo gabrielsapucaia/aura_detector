@@ -133,12 +133,10 @@ class TelemetryService : LifecycleService() {
             }
         }
         queueMonitorJob = serviceScope.launch {
-            Timber.d("Queue monitor job started")
             while (isActive) {
                 try {
                     val count = offlineQueue.size()
                     val sizeMB = offlineQueue.sizeInMB()
-                    Timber.d("Queue monitor: count=$count, sizeMB=$sizeMB")
                     TelemetryStateStore.update {
                         it.copy(queueSize = count, offlineQueueSizeMB = sizeMB)
                     }
@@ -147,7 +145,6 @@ class TelemetryService : LifecycleService() {
                 }
                 delay(2000L)
             }
-            Timber.d("Queue monitor job stopped")
         }
         serviceScope.launch {
             mqttPublisher.statuses.collectLatest { statuses ->
