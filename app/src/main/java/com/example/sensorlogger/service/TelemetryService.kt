@@ -138,17 +138,26 @@ class TelemetryService : LifecycleService() {
                 var cycleCount = 0
                 while (isActive) {
                     try {
-                        // Every 12 cycles (60 seconds), recalculate to detect drift
-                        if (cycleCount % 12 == 0) {
-                            offlineQueue.recalculateSize()
-                        }
-                        cycleCount++
-                        
                         val count = offlineQueue.size()
                         val sizeMB = offlineQueue.sizeInMB()
-                        android.util.Log.i("TelemetryService", "Queue monitor: count=$count, sizeMB=${"%.2f".format(sizeMB)}")
+                        
+                        // Hybrid recalculation triggers:
+                        // 1. Anomaly detection: non-zero count but zero size
+                        val hasAnomaly = count > 0 && sizeMB < 0.01f
+                        
+                        // 2. Periodic safety check every 20 cycles (100 seconds)
+                        val periodicCheck = cycleCount % 20 == 0
+                        
+                        if (hasAnomaly || periodicCheck) {
+                            offlineQueue.recalculateSize()
+                        }
+                        
+                        cycleCount++
+                        
+                        val updatedCount = offlineQueue.size()
+                        android.util.Log.i("TelemetryService", "Queue monitor: count=$updatedCount, sizeMB=${"%.2f".format(sizeMB)}")
                         TelemetryStateStore.update {
-                            it.copy(queueSize = count, offlineQueueSizeMB = sizeMB)
+                            it.copy(queueSize = updatedCount, offlineQueueSizeMB = sizeMB)
                         }
                     } catch (e: Exception) {
                         android.util.Log.w("TelemetryService", "Queue monitor update failed", e)
@@ -637,6 +646,12 @@ class TelemetryService : LifecycleService() {
         var backoff = DRAIN_MIN_BACKOFF_MS
         while (serviceScope.isActive) {
             val outcome = drainOfflineBatch()
+            
+            // Hybrid trigger: Recalculate after processing messages
+            if (outcome.processed > 0) {
+                offlineQueue.recalculateSize()
+            }
+            
             if (outcome.remaining == 0) {
                 backoff = DRAIN_MIN_BACKOFF_MS
                 if (waitForDrainTrigger(DRAIN_IDLE_INTERVAL_MS)) {

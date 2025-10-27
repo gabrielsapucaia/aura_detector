@@ -134,7 +134,8 @@ class OfflineQueue(context: Context) {
         val actual = withContext(Dispatchers.IO) { countActualMessages() }
         val current = queueSize.get()
         if (actual != current) {
-            Timber.i("Queue size mismatch: cached=$current, actual=$actual. Recalculating...")
+            val drift = actual - current
+            Timber.i("Queue size drift detected: cached=$current, actual=$actual, drift=$drift. Recalculating...")
             queueSize.set(actual)
         }
     }
