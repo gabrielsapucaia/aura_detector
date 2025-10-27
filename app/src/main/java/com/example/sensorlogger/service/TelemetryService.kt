@@ -134,10 +134,10 @@ class TelemetryService : LifecycleService() {
             
             // Start queue monitor AFTER initialization
             queueMonitorJob = launch {
-                android.util.Log.i("TelemetryService", "Queue monitor job STARTED, updating every 1 second")
+                android.util.Log.i("TelemetryService", "Queue monitor job STARTED, updating every 5 seconds")
                 while (isActive) {
                     try {
-                        val count = offlineQueue.countActualMessages()
+                        val count = offlineQueue.size()
                         val sizeMB = offlineQueue.sizeInMB()
                         android.util.Log.i("TelemetryService", "Queue monitor: count=$count, sizeMB=${"%.2f".format(sizeMB)}")
                         TelemetryStateStore.update {
@@ -146,7 +146,7 @@ class TelemetryService : LifecycleService() {
                     } catch (e: Exception) {
                         android.util.Log.w("TelemetryService", "Queue monitor update failed", e)
                     }
-                    delay(1000L)
+                    delay(5000L)
                 }
                 android.util.Log.i("TelemetryService", "Queue monitor job STOPPED")
             }
@@ -194,11 +194,6 @@ class TelemetryService : LifecycleService() {
             ACTION_STOP -> stopLogging()
             ACTION_DRAIN_QUEUE -> {
                 drainTrigger.trySend(Unit)
-                serviceScope.launch {
-                    val size = offlineQueue.size()
-                    val sizeMB = offlineQueue.sizeInMB()
-                    TelemetryStateStore.update { state -> state.copy(queueSize = size, offlineQueueSizeMB = sizeMB) }
-                }
             }
             ACTION_RECONNECT -> {
                 serviceScope.launch {
@@ -622,9 +617,6 @@ class TelemetryService : LifecycleService() {
                 android.util.Log.i("TelemetryService", "Enqueue completed: stored=$stored")
                 if (stored) {
                     drainTrigger.trySend(Unit)
-                    val queueSize = offlineQueue.size()
-                    val queueSizeMB = offlineQueue.sizeInMB()
-                    TelemetryStateStore.update { state -> state.copy(queueSize = queueSize, offlineQueueSizeMB = queueSizeMB) }
                 } else {
                     Timber.w("Offline queue drop for seq=%d: daily limit reached", payload.sequenceId)
                 }
@@ -638,8 +630,6 @@ class TelemetryService : LifecycleService() {
         var backoff = DRAIN_MIN_BACKOFF_MS
         while (serviceScope.isActive) {
             val outcome = drainOfflineBatch()
-            val queueSizeMB = offlineQueue.sizeInMB()
-            TelemetryStateStore.update { state -> state.copy(queueSize = outcome.remaining, offlineQueueSizeMB = queueSizeMB) }
             if (outcome.remaining == 0) {
                 backoff = DRAIN_MIN_BACKOFF_MS
                 if (waitForDrainTrigger(DRAIN_IDLE_INTERVAL_MS)) {
