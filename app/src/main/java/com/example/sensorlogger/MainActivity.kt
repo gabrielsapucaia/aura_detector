@@ -159,7 +159,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnStatusCarregado.setOnClickListener {
-            updateTruckStatus("CARREGADO")
+            updateTruckStatus("CHEIO")
         }
 
         binding.btnStatusBasculando.setOnClickListener {
@@ -527,7 +527,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(ContextCompat.getColor(context, android.R.color.white))
         }
         binding.btnStatusCarregado.apply {
-            backgroundTintList = ColorStateList.valueOf(if (currentStatus == "CARREGADO") activeColor else inactiveColor)
+            backgroundTintList = ColorStateList.valueOf(if (currentStatus == "CHEIO") activeColor else inactiveColor)
             setTextColor(ContextCompat.getColor(context, android.R.color.white))
         }
         binding.btnStatusBasculando.apply {
