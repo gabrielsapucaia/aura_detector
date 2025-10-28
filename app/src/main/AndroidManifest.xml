@@ -39,7 +39,8 @@
         <activity
             android:name=".DebugDashboardActivity"
             android:exported="true"
-            android:label="Debug Dashboard" />
+            android:label="Debug Dashboard"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
 
         <service
             android:name=".service.TelemetryService"

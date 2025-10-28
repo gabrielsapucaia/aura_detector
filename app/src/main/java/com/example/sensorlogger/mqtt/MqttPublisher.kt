@@ -339,21 +339,27 @@ class MqttPublisher(
     private suspend fun attemptDiscovery(): Boolean {
         if (!discoveryEnabled || discoveryAttempted) return false
         discoveryAttempted = true
-        Timber.i("Attempting MQTT broker discovery on %s.*", discoveryPrefix)
-        val hosts = BrokerDiscovery.scan(
-            prefix = discoveryPrefix,
-            rangeSpec = discoveryRange,
-            port = BuildConfig.MQTT_PORT,
-            timeoutMs = discoveryTimeoutMs
-        )
-        if (hosts.isEmpty()) {
+        val prefixes = discoveryPrefix.split(',', ';').map { it.trim() }.filter { it.isNotEmpty() }
+        Timber.i("Attempting MQTT broker discovery on prefixes: %s", prefixes.joinToString(", "))
+        val allHosts = mutableListOf<String>()
+        for (prefix in prefixes) {
+            val hosts = BrokerDiscovery.scan(
+                prefix = prefix,
+                rangeSpec = discoveryRange,
+                port = BuildConfig.MQTT_PORT,
+                timeoutMs = discoveryTimeoutMs
+            )
+            allHosts.addAll(hosts)
+            if (allHosts.size >= 3) break
+        }
+        if (allHosts.isEmpty()) {
             Timber.i("Broker discovery did not find any hosts")
             return false
         }
-        val uris = hosts.map { "${BuildConfig.MQTT_SCHEME}://$it:${BuildConfig.MQTT_PORT}" }
+        val uris = allHosts.map { "${BuildConfig.MQTT_SCHEME}://$it:${BuildConfig.MQTT_PORT}" }
         val combined = (uris + configuredEndpoints).distinct()
         setEndpoints(combined)
-        Timber.i("Discovered MQTT brokers: %s", hosts.joinToString(", "))
+        Timber.i("Discovered MQTT brokers: %s", allHosts.joinToString(", "))
         return true
     }
 

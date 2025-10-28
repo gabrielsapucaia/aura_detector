@@ -84,6 +84,16 @@ class MainActivity : AppCompatActivity() {
         observeState()
         updatePermissionsState()
         requestNotificationPermissionIfNeeded()
+        
+        // Auto-start if enabled and service not running
+        lifecycleScope.launch {
+            TelemetryStateStore.state.collect { state ->
+                if (operatorStore.autoStart && !state.serviceRunning && hasForegroundPermissions() && ensureOperatorIdentity()) {
+                    startTelemetryService()
+                }
+                return@collect
+            }
+        }
     }
 
     override fun onResume() {
