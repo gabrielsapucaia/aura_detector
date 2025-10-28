@@ -49,6 +49,7 @@ object TelemetryMappers {
 
     data class Extras(
         val equipmentTag: String? = null,
+        val truckStatus: String? = null,
         val barometerPressureHpa: Float? = null,
         val barometerAltitudeMeters: Float? = null,
         val gnss: GnssExtras = GnssExtras(),
@@ -71,6 +72,7 @@ object TelemetryMappers {
             deviceId = payload.deviceId,
             operatorId = payload.operatorId,
             equipmentTag = payload.equipmentTag.ifBlank { extras.equipmentTag },
+            truckStatus = extras.truckStatus,
             sequenceId = payload.sequence,
             timestampEpoch = payload.timestampUtc,
             gnssElapsedRealtimeNanos = extras.gnss.elapsedRealtimeNanos,

@@ -154,6 +154,22 @@ class MainActivity : AppCompatActivity() {
             operatorStore.autoStart = isChecked
         }
 
+        binding.btnStatusCarregando.setOnClickListener {
+            updateTruckStatus("CARREGANDO")
+        }
+
+        binding.btnStatusCarregado.setOnClickListener {
+            updateTruckStatus("CARREGADO")
+        }
+
+        binding.btnStatusBasculando.setOnClickListener {
+            updateTruckStatus("BASCULANDO")
+        }
+
+        binding.btnStatusVazio.setOnClickListener {
+            updateTruckStatus("VAZIO")
+        }
+
         binding.buttonBattery.setOnClickListener {
             requestBatteryOptimizationExemption()
         }
@@ -474,11 +490,13 @@ class MainActivity : AppCompatActivity() {
         binding.inputEquipmentTag.setText(operatorStore.equipmentTag)
         binding.checkAutoStart.isChecked = operatorStore.autoStart
         binding.switchNmea.isChecked = operatorStore.nmeaEnabled
+        updateTruckStatusButtons(operatorStore.truckStatus)
         TelemetryStateStore.update { state ->
             state.copy(
                 operatorId = operatorStore.operatorId,
                 operatorName = operatorStore.operatorName,
                 equipmentTag = operatorStore.equipmentTag,
+                truckStatus = operatorStore.truckStatus,
                 nmeaEnabled = operatorStore.nmeaEnabled
             )
         }
@@ -492,6 +510,34 @@ class MainActivity : AppCompatActivity() {
         val canStart = hasOperator && hasEquipment && uiState.permissionsGranted && !uiState.serviceRunning
         binding.buttonStart.isEnabled = canStart
         binding.buttonReconnect.isEnabled = uiState.serviceRunning
+    }
+
+    private fun updateTruckStatus(status: String) {
+        operatorStore.truckStatus = status
+        TelemetryStateStore.update { state -> state.copy(truckStatus = status) }
+        updateTruckStatusButtons(status)
+    }
+
+    private fun updateTruckStatusButtons(currentStatus: String) {
+        val activeColor = ContextCompat.getColor(this, R.color.brand_primary)
+        val inactiveColor = ContextCompat.getColor(this, android.R.color.darker_gray)
+        
+        binding.btnStatusCarregando.apply {
+            backgroundTintList = ColorStateList.valueOf(if (currentStatus == "CARREGANDO") activeColor else inactiveColor)
+            setTextColor(ContextCompat.getColor(context, android.R.color.white))
+        }
+        binding.btnStatusCarregado.apply {
+            backgroundTintList = ColorStateList.valueOf(if (currentStatus == "CARREGADO") activeColor else inactiveColor)
+            setTextColor(ContextCompat.getColor(context, android.R.color.white))
+        }
+        binding.btnStatusBasculando.apply {
+            backgroundTintList = ColorStateList.valueOf(if (currentStatus == "BASCULANDO") activeColor else inactiveColor)
+            setTextColor(ContextCompat.getColor(context, android.R.color.white))
+        }
+        binding.btnStatusVazio.apply {
+            backgroundTintList = ColorStateList.valueOf(if (currentStatus == "VAZIO") activeColor else inactiveColor)
+            setTextColor(ContextCompat.getColor(context, android.R.color.white))
+        }
     }
 
     private fun ensureOperatorIdentity(): Boolean {

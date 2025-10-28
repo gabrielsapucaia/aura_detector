@@ -417,6 +417,7 @@ class TelemetryService : LifecycleService() {
 
             val extras = TelemetryMappers.Extras(
                 equipmentTag = equipmentTag.takeIf { it.isNotBlank() },
+                truckStatus = TelemetryStateStore.state.value.truckStatus,
                 barometerPressureHpa = imuSnapshot.pressure.takeIf { it != 0f },
                 barometerAltitudeMeters = imuSnapshot.altitudeBaro.takeIf { it != 0f },
                 gnss = TelemetryMappers.GnssExtras(

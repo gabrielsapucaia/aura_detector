@@ -36,6 +36,12 @@ class OperatorStore(context: Context) {
             prefs.edit().putBoolean(KEY_NMEA_ENABLED, value).apply()
         }
 
+    var truckStatus: String
+        get() = prefs.getString(KEY_TRUCK_STATUS, "VAZIO") ?: "VAZIO"
+        set(value) {
+            prefs.edit().putString(KEY_TRUCK_STATUS, value).apply()
+        }
+
     companion object {
         private const val PREF_NAME = "sensorlogger_operator"
         private const val KEY_OPERATOR_ID = "operator_code"
@@ -43,5 +49,6 @@ class OperatorStore(context: Context) {
         private const val KEY_EQUIPMENT_TAG = "equipment_tag"
         private const val KEY_AUTO_START = "auto_start"
         private const val KEY_NMEA_ENABLED = "nmea_enabled"
+        private const val KEY_TRUCK_STATUS = "truck_status"
     }
 }

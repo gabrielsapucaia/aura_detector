@@ -4,6 +4,7 @@ data class TelemetryUiState(
     val operatorId: String = "",
     val operatorName: String = "",
     val equipmentTag: String = "",
+    val truckStatus: String = "VAZIO",
     val serviceRunning: Boolean = false,
     val localBrokerStatus: BrokerStatus = BrokerStatus.Disabled,
     val cloudBrokerStatus: BrokerStatus = BrokerStatus.Disabled,
