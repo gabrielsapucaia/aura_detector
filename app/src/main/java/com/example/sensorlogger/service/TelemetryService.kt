@@ -11,12 +11,13 @@ import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
+import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -34,30 +35,34 @@ import com.example.sensorlogger.mqtt.MqttPublisher
 import com.example.sensorlogger.repository.TelemetryStateStore
 import com.example.sensorlogger.sensors.ImuAggregator
 import com.example.sensorlogger.storage.CsvWriter
+import com.example.sensorlogger.storage.MinioUploader
 import com.example.sensorlogger.storage.OfflineQueue
 import com.example.sensorlogger.storage.OfflineQueue.DrainOutcome
+import com.example.sensorlogger.work.EnsureTelemetryRunningWorker
 import com.example.sensorlogger.util.IdProvider
 import com.example.sensorlogger.util.Time
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.selects.onTimeout
-import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
 import com.example.sensorlogger.BuildConfig
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import timber.log.Timber
+import java.io.File
 import java.nio.charset.StandardCharsets
 import kotlin.math.min
 import kotlin.random.Random
@@ -77,25 +82,35 @@ class TelemetryService : LifecycleService() {
 
     private val json = Json { encodeDefaults = true }
     private val notificationManager by lazy { NotificationManagerCompat.from(this) }
-    private val drainTrigger = Channel<Unit>(Channel.CONFLATED)
+    private val drainTrigger = MutableSharedFlow<Unit>(
+        replay = 0,
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
     private var wifiLock: WifiManager.WifiLock? = null
+    private var wakeLock: PowerManager.WakeLock? = null
     private var autoReconnectJob: Job? = null
     @Volatile
     private var autoReconnectActive = false
+    private var autoReconnectDelayMs = AUTO_RECONNECT_INITIAL_DELAY_MS
+    private var awaitingOperatorConfig = false
+    private var lastNetworkSnapshot: NetworkSnapshot? = null
 
     private var networkCallbackRegistered = false
-    private val wifiCallback = object : ConnectivityManager.NetworkCallback() {
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             super.onAvailable(network)
-            if (!::connectivityManager.isInitialized) return
-            val capabilities = connectivityManager.getNetworkCapabilities(network)
-            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
-                drainTrigger.trySend(Unit)
-                serviceScope.launch {
-                    runCatching { mqttPublisher.reconnect() }
-                        .onFailure { Timber.w(it, "MQTT reconnection on Wi-Fi available failed") }
-                }
-            }
+            handleNetworkChange("available", network)
+        }
+
+        override fun onLost(network: Network) {
+            super.onLost(network)
+            handleNetworkChange("lost", network)
+        }
+
+        override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+            super.onCapabilitiesChanged(network, networkCapabilities)
+            handleNetworkChange("capabilities", network, networkCapabilities)
         }
     }
 
@@ -108,63 +123,100 @@ class TelemetryService : LifecycleService() {
     private var queueFlushJob: Job? = null
     private var disconnectJob: Job? = null
     private var queueMonitorJob: Job? = null
+    private var permissionsPrompted = false
+    private var restartOnDestroy = true
+    private val batteryOptimizationPrefs by lazy {
+        getSharedPreferences(BATTERY_PREFS, Context.MODE_PRIVATE)
+    }
+    private var lastTelemetryPayload: TelemetryPayload? = null
+    private var lastTelemetryPayloadV11: TelemetryPayloadV11? = null
+    private var lastGnssSnapshot: GnssSnapshot? = null
+    private var lastImuSnapshot: ImuSnapshot? = null
+    private var minioUploader: MinioUploader? = null
 
     override fun onCreate() {
         super.onCreate()
         imuAggregator = ImuAggregator(this)
         gnssManager = GnssManager(this)
-        csvWriter = CsvWriter(this, TelemetryPayload.HEADER)
+        minioUploader = createMinioUploader()
+        csvWriter = CsvWriter(
+            context = this,
+            header = TelemetryPayload.HEADER,
+            rotateBytes = BuildConfig.CSV_ROTATE_BYTES,
+            rotateMinutes = BuildConfig.CSV_ROTATE_MINUTES,
+            archiveListener = CsvWriter.ArchiveListener { file -> handleCsvArchive(file) }
+        )
         offlineQueue = OfflineQueue(this)
         idProvider = IdProvider(this)
-        mqttPublisher = MqttPublisher(deviceIdProvider = { idProvider.deviceId })
+        mqttPublisher = MqttPublisher(
+            context = this,
+            deviceIdProvider = { idProvider.deviceId }
+        )
         connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
         createNotificationChannel()
-        registerWifiCallback()
+        registerNetworkCallback()
+        EnsureTelemetryRunningWorker.schedulePeriodic(applicationContext)
 
         serviceScope.launch {
             offlineQueue.initialize()
-            val size = offlineQueue.size()
-            val sizeMB = offlineQueue.sizeInMB()
-            TelemetryStateStore.update { state -> state.copy(queueSize = size, offlineQueueSizeMB = sizeMB) }
-            if (size > 0) {
-                drainTrigger.trySend(Unit)
+            val queueStats = offlineQueue.currentStats()
+            TelemetryStateStore.update { state ->
+                state.copy(
+                    queueSize = queueStats.count,
+                    offlineQueueSizeMB = queueStats.sizeMb
+                )
             }
-            
+            if (queueStats.count > 0) {
+                drainTrigger.tryEmit(Unit)
+            }
+
             // Start queue monitor AFTER initialization
             queueMonitorJob = launch {
-                android.util.Log.i("TelemetryService", "Queue monitor job STARTED, updating every 5 seconds")
+                Timber.i("Offline queue monitor started")
                 var cycleCount = 0
                 while (isActive) {
                     try {
-                        val count = offlineQueue.size()
-                        val sizeMB = offlineQueue.sizeInMB()
-                        
+                        val currentStats = offlineQueue.currentStats()
+
                         // Hybrid recalculation triggers:
                         // 1. Anomaly detection: non-zero count but zero size
-                        val hasAnomaly = count > 0 && sizeMB < 0.01f
+                        val hasAnomaly = currentStats.count > 0 && currentStats.sizeMb < 0.01f
                         
                         // 2. Periodic safety check every 20 cycles (100 seconds)
                         val periodicCheck = cycleCount % 20 == 0
                         
-                        if (hasAnomaly || periodicCheck) {
-                            offlineQueue.recalculateSize()
+                        val stats = if (hasAnomaly || periodicCheck) {
+                            offlineQueue.recalculateStats().also {
+                                Timber.i(
+                                    "Offline queue stats recalculated | count=%d size=%.2fMB (anomaly=%s periodic=%s)",
+                                    it.count,
+                                    it.sizeMb,
+                                    hasAnomaly,
+                                    periodicCheck
+                                )
+                            }
+                        } else {
+                            currentStats
                         }
-                        
+
                         cycleCount++
-                        
-                        val updatedCount = offlineQueue.size()
-                        android.util.Log.i("TelemetryService", "Queue monitor: count=$updatedCount, sizeMB=${"%.2f".format(sizeMB)}")
+
+                        Timber.v(
+                            "Offline queue monitor snapshot | count=%d size=%.2fMB",
+                            stats.count,
+                            stats.sizeMb
+                        )
                         TelemetryStateStore.update {
-                            it.copy(queueSize = updatedCount, offlineQueueSizeMB = sizeMB)
+                            it.copy(queueSize = stats.count, offlineQueueSizeMB = stats.sizeMb)
                         }
                     } catch (e: Exception) {
-                        android.util.Log.w("TelemetryService", "Queue monitor update failed", e)
+                        Timber.w(e, "Queue monitor update failed")
                     }
                     delay(5000L)
                 }
-                android.util.Log.i("TelemetryService", "Queue monitor job STOPPED")
+                Timber.i("Offline queue monitor stopped")
             }
         }
         serviceScope.launch {
@@ -205,15 +257,21 @@ class TelemetryService : LifecycleService() {
                 operatorName = intent.getStringExtra(EXTRA_OPERATOR_NAME) ?: operatorName
                 equipmentTag = intent.getStringExtra(EXTRA_EQUIPMENT_TAG) ?: equipmentTag
                 nmeaEnabled = intent.getBooleanExtra(EXTRA_NMEA_ENABLED, true)
+                restartOnDestroy = true
                 startLogging()
             }
-            ACTION_STOP -> stopLogging()
+            ACTION_STOP -> {
+                restartOnDestroy = false
+                stopLogging()
+            }
             ACTION_DRAIN_QUEUE -> {
-                drainTrigger.trySend(Unit)
+                drainTrigger.tryEmit(Unit)
             }
             ACTION_RECONNECT -> {
+                resetAutoReconnectBackoff()
                 serviceScope.launch {
-                    mqttPublisher.reconnect()
+                    runCatching { mqttPublisher.reconnect(resetBackoff = true) }
+                        .onFailure { Timber.w(it, "Manual MQTT reconnect failed") }
                 }
             }
         }
@@ -227,15 +285,27 @@ class TelemetryService : LifecycleService() {
 
     override fun onDestroy() {
         if (networkCallbackRegistered && ::connectivityManager.isInitialized) {
-            runCatching { connectivityManager.unregisterNetworkCallback(wifiCallback) }
+            runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
             networkCallbackRegistered = false
         }
-        drainTrigger.close()
         queueMonitorJob?.cancel()
         stopLogging()
         runBlocking { disconnectJob?.join() }
         serviceScope.cancel()
+        if (restartOnDestroy) {
+            EnsureTelemetryRunningWorker.scheduleImmediate(applicationContext, "service_stopped")
+        }
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        if (!isRunning || !restartOnDestroy) {
+            Timber.i("TelemetryService task removed but restart disabled")
+            return
+        }
+        Timber.w("TelemetryService task removed; scheduling immediate worker restart")
+        EnsureTelemetryRunningWorker.scheduleImmediate(applicationContext, "service_stopped")
     }
 
     private fun startLogging() {
@@ -243,26 +313,47 @@ class TelemetryService : LifecycleService() {
             updateNotification()
             return
         }
-        if (!hasLocationPermission()) {
-            Timber.w("TelemetryService start skipped: missing location permission")
-            TelemetryStateStore.update { state ->
-                state.copy(serviceRunning = false, permissionsGranted = false)
-            }
-            stopSelf()
+        restartOnDestroy = true
+        val missingPermissions = missingRequiredPermissions()
+        if (missingPermissions.isNotEmpty()) {
+            Timber.w("TelemetryService pending: missing permissions %s", missingPermissions)
+            notifyMissingPermissions(missingPermissions)
             return
         }
         if (operatorId.isBlank() || equipmentTag.isBlank()) {
-            Timber.w("TelemetryService start skipped: missing operatorId or equipmentTag")
-            stopSelf()
+            Timber.w("TelemetryService pending: operatorId or equipmentTag missing")
+            awaitingOperatorConfig = true
+            val batteryOptIgnored = checkBatteryOptimization()
+            val notificationPerm = checkNotificationPermission()
+            startForeground(NOTIFICATION_ID, buildNotification(initial = true))
+            TelemetryStateStore.update { state ->
+                state.copy(
+                    serviceRunning = false,
+                    operatorId = operatorId,
+                    operatorName = operatorName,
+                    equipmentTag = equipmentTag,
+                    batteryOptimizationIgnored = batteryOptIgnored,
+                    notificationPermissionGranted = notificationPerm,
+                    permissionsGranted = true,
+                    awaitingConfiguration = true
+                )
+            }
+            EnsureTelemetryRunningWorker.schedulePeriodic(applicationContext)
+            EnsureTelemetryRunningWorker.scheduleOneTimeCheck(applicationContext)
             return
         }
+        awaitingOperatorConfig = false
         isRunning = true
+        resetAutoReconnectBackoff()
+        acquireWakeLock()
         acquireWifiLock()
         startForeground(NOTIFICATION_ID, buildNotification(initial = true))
         imuAggregator.start()
         gnssManager.start(nmeaEnabled)
+        mqttPublisher.startKeepAlive(serviceScope)
         
         val batteryOptIgnored = checkBatteryOptimization()
+        requestBatteryOptimizationIfNeeded(batteryOptIgnored)
         val notificationPerm = checkNotificationPermission()
         
         TelemetryStateStore.update { state ->
@@ -272,11 +363,13 @@ class TelemetryService : LifecycleService() {
                 operatorName = operatorName,
                 equipmentTag = equipmentTag,
                 batteryOptimizationIgnored = batteryOptIgnored,
-                notificationPermissionGranted = notificationPerm
+                notificationPermissionGranted = notificationPerm,
+                permissionsGranted = true,
+                awaitingConfiguration = false
             )
         }
         serviceScope.launch { telemetryLoop() }
-        drainTrigger.trySend(Unit)
+        drainTrigger.tryEmit(Unit)
     }
 
     private fun checkBatteryOptimization(): Boolean {
@@ -284,6 +377,31 @@ class TelemetryService : LifecycleService() {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             powerManager.isIgnoringBatteryOptimizations(packageName)
         } else true
+    }
+
+    private fun requestBatteryOptimizationIfNeeded(batteryOptIgnored: Boolean) {
+        if (batteryOptIgnored) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        if (batteryOptimizationPrefs.getBoolean(KEY_BATTERY_OPT_PROMPTED, false)) return
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:$packageName")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { startActivity(intent) }
+            .onSuccess {
+                batteryOptimizationPrefs.edit().putBoolean(KEY_BATTERY_OPT_PROMPTED, true).apply()
+                Timber.i("Requested battery optimization exemption from service")
+            }
+            .onFailure { throwable ->
+                Timber.w(throwable, "Failed to request battery optimization exemption")
+                batteryOptimizationPrefs.edit().putBoolean(KEY_BATTERY_OPT_PROMPTED, true).apply()
+                runCatching {
+                    val settingsIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(settingsIntent)
+                }.onFailure { Timber.w(it, "Failed to open battery optimization settings") }
+            }
     }
 
     private fun checkNotificationPermission(): Boolean {
@@ -295,33 +413,62 @@ class TelemetryService : LifecycleService() {
         } else true
     }
 
-    private fun hasLocationPermission(): Boolean {
-        val fineGranted = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-        if (fineGranted) return true
-        val coarseGranted = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.ACCESS_COARSE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-        return coarseGranted
+    private fun missingRequiredPermissions(): List<String> {
+        val missing = REQUIRED_PERMISSIONS.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }.toMutableSet()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val backgroundGranted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!backgroundGranted) {
+                missing.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            }
+        }
+        return missing.toList()
+    }
+
+    private fun notifyMissingPermissions(missing: List<String>) {
+        Timber.w("TelemetryService cannot start: missing permissions %s", missing.joinToString())
+        TelemetryStateStore.update { state ->
+            state.copy(
+                serviceRunning = false,
+                permissionsGranted = false,
+                awaitingConfiguration = false
+            )
+        }
+        restartOnDestroy = true
+        if (!permissionsPrompted) {
+            permissionsPrompted = true
+            val intent = Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra(MainActivity.EXTRA_FORCE_PERMISSIONS, true)
+            }
+            runCatching { startActivity(intent) }
+                .onFailure { Timber.w(it, "Failed to launch MainActivity for missing permissions") }
+        }
+        stopSelf()
     }
 
     private fun stopLogging() {
+        awaitingOperatorConfig = false
         if (!isRunning) {
+            releaseWakeLock()
             releaseWifiLock()
             stopAutoReconnectLoop()
             stopForeground(STOP_FOREGROUND_DETACH)
             return
         }
         isRunning = false
+        releaseWakeLock()
         releaseWifiLock()
         imuAggregator.stop()
         gnssManager.stop()
+        mqttPublisher.stopKeepAlive()
         disconnectJob = serviceScope.launch { mqttPublisher.disconnectAll(idProvider.deviceId) }
         TelemetryStateStore.update { state ->
-            state.copy(serviceRunning = false)
+            state.copy(serviceRunning = false, awaitingConfiguration = false)
         }
         stopAutoReconnectLoop()
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -356,6 +503,22 @@ class TelemetryService : LifecycleService() {
             .getOrNull() ?: currentLock
     }
 
+    private fun acquireWakeLock() {
+        val currentLock = wakeLock
+        if (currentLock?.isHeld == true) return
+        wakeLock = runCatching {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "SensorLogger:TelemetryCPU"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }.onFailure { Timber.w(it, "Failed to acquire CPU wake lock") }
+            .getOrNull() ?: currentLock
+    }
+
     private fun releaseWifiLock() {
         wifiLock?.let { lock ->
             runCatching {
@@ -367,19 +530,29 @@ class TelemetryService : LifecycleService() {
         wifiLock = null
     }
 
+    private fun releaseWakeLock() {
+        wakeLock?.let { lock ->
+            runCatching {
+                if (lock.isHeld) {
+                    lock.release()
+                }
+            }.onFailure { Timber.w(it, "Failed to release CPU wake lock") }
+        }
+        wakeLock = null
+    }
+
     private fun startAutoReconnectLoop() {
         if (autoReconnectActive || !isRunning) return
         autoReconnectActive = true
         autoReconnectJob = serviceScope.launch {
-            var delayMs = AUTO_RECONNECT_INITIAL_DELAY_MS
             while (isActive && autoReconnectActive && isRunning) {
-                delay(delayMs)
+                delay(autoReconnectDelayMs)
                 if (!autoReconnectActive || !isRunning) break
                 val success = runCatching { mqttPublisher.reconnect() }.isSuccess
-                delayMs = if (success) {
+                autoReconnectDelayMs = if (success) {
                     AUTO_RECONNECT_INITIAL_DELAY_MS
                 } else {
-                    (delayMs * 2).coerceAtMost(AUTO_RECONNECT_MAX_DELAY_MS)
+                    (autoReconnectDelayMs * 2).coerceAtMost(AUTO_RECONNECT_MAX_DELAY_MS)
                 }
             }
         }
@@ -389,32 +562,159 @@ class TelemetryService : LifecycleService() {
         autoReconnectActive = false
         autoReconnectJob?.cancel()
         autoReconnectJob = null
+        resetAutoReconnectBackoff()
     }
 
-    private fun registerWifiCallback() {
-        val request = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-            .build()
+    private fun resetAutoReconnectBackoff() {
+        autoReconnectDelayMs = AUTO_RECONNECT_INITIAL_DELAY_MS
+    }
+
+    private fun registerNetworkCallback() {
         try {
-            connectivityManager.registerNetworkCallback(request, wifiCallback)
+            connectivityManager.registerDefaultNetworkCallback(networkCallback)
             networkCallbackRegistered = true
         } catch (t: Throwable) {
-            Timber.w(t, "Failed to register Wi-Fi callback")
+            Timber.w(t, "Failed to register network callback")
         }
     }
 
+    private fun handleNetworkChange(
+        event: String,
+        network: Network,
+        providedCapabilities: NetworkCapabilities? = null
+    ) {
+        if (!::connectivityManager.isInitialized) return
+        val capabilities = providedCapabilities ?: runCatching {
+            connectivityManager.getNetworkCapabilities(network)
+        }.getOrNull()
+        val connected = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        val validated = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        val transport = describeNetworkTransport(capabilities)
+
+        Timber.i(
+            "Network %s | connected=%s transport=%s validated=%s",
+            event,
+            connected,
+            transport,
+            validated
+        )
+
+        TelemetryStateStore.update { state ->
+            state.copy(
+                networkConnected = connected,
+                networkTransport = transport,
+                networkValidated = validated
+            )
+        }
+
+        val snapshot = NetworkSnapshot(
+            connected = connected,
+            transport = transport,
+            validated = validated
+        )
+        val previous = lastNetworkSnapshot
+        val connectedChanged = previous?.connected != connected
+        val transportChanged = previous?.transport != transport
+        val validatedChanged = previous?.validated != validated
+
+        if (connectedChanged || transportChanged) {
+            mqttPublisher.resetVerification()
+        }
+
+        val shouldReconnect = when (event) {
+            "available" -> true
+            "lost" -> previous?.connected == true
+            else -> connected && (connectedChanged || transportChanged || validatedChanged)
+        }
+        if (shouldReconnect) {
+            resetAutoReconnectBackoff()
+            serviceScope.launch {
+                runCatching { mqttPublisher.reconnect(resetBackoff = true) }
+                    .onFailure { Timber.w(it, "MQTT reconnect failed after network %s", event) }
+            }
+        }
+        if (connected && (shouldReconnect || connectedChanged || transportChanged)) {
+            drainTrigger.tryEmit(Unit)
+        }
+        lastNetworkSnapshot = snapshot
+    }
+
+    private fun describeNetworkTransport(capabilities: NetworkCapabilities?): String? {
+        capabilities ?: return null
+        return when {
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH) -> "bluetooth"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
+            else -> "other"
+        }
+    }
+
+    private fun isOnWifi(): Boolean {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = cm.activeNetwork ?: return false
+        val capabilities = cm.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+    }
+
+    private fun nowMono(): Long = SystemClock.elapsedRealtime()
+
     private suspend fun telemetryLoop() {
-        while (isRunning) {
-            val frameStart = SystemClock.elapsedRealtime()
+        val baseMono = nowMono()
+        val baseEpoch = Time.nowUtcMillis()
+        var tickIndex = 0L
+        while (isRunning && serviceScope.isActive) {
+            val targetMono = baseMono + tickIndex * PERIOD_MS
+            var currentMono = nowMono()
+            val sleep = targetMono - currentMono
+            if (sleep > 0) {
+                delay(sleep)
+                currentMono = nowMono()
+            }
+            val ticksBehind = ((currentMono - targetMono) / PERIOD_MS).coerceAtLeast(0L)
+            if (ticksBehind > MAX_CATCH_UP_TICKS) {
+                val overflow = ticksBehind - MAX_CATCH_UP_TICKS
+                repeat(overflow.toInt()) {
+                    val missedTargetMono = baseMono + tickIndex * PERIOD_MS
+                    val missedTimestampUtc = baseEpoch + (missedTargetMono - baseMono)
+                    emitMissedTick(missedTimestampUtc)
+                    tickIndex += 1
+                }
+            }
+            val catchUpTicks = if (ticksBehind > MAX_CATCH_UP_TICKS) MAX_CATCH_UP_TICKS else ticksBehind
+            repeat(catchUpTicks.toInt()) {
+                if (!isRunning || !serviceScope.isActive) return
+                val catchUpTarget = baseMono + tickIndex * PERIOD_MS
+                executeTelemetryTick(catchUpTarget)
+                tickIndex += 1
+            }
+            if (!isRunning || !serviceScope.isActive) {
+                break
+            }
+            val currentTarget = baseMono + tickIndex * PERIOD_MS
+            executeTelemetryTick(currentTarget)
+            tickIndex += 1
+        }
+    }
+
+    private suspend fun executeTelemetryTick(targetMono: Long) {
+        val frameStart = nowMono()
+        try {
             val nowUtc = Time.nowUtcMillis()
             val seq = idProvider.nextSequence()
             val elapsedRealtime = Time.elapsedRealtimeNanos()
             val imuSnapshot = imuAggregator.snapshot(nowUtc)
             val gnssSnapshot = gnssManager.snapshot()
-            val payload = buildPayload(nowUtc, elapsedRealtime, seq, imuSnapshot, gnssSnapshot)
-
-            serviceScope.launch { writeCsv(payload) }
-
+            val payload = buildPayload(
+                tsUtc = nowUtc,
+                elapsedRealtimeNanos = elapsedRealtime,
+                seq = seq,
+                imu = imuSnapshot,
+                gnss = gnssSnapshot,
+                status = STATUS_OK,
+                origin = ORIGIN_LIVE
+            )
             val extras = TelemetryMappers.Extras(
                 equipmentTag = equipmentTag.takeIf { it.isNotBlank() },
                 truckStatus = TelemetryStateStore.state.value.truckStatus,
@@ -467,179 +767,376 @@ class TelemetryService : LifecycleService() {
                 imuSnapshot,
                 extras = extras
             )
-            val payloadJson = json.encodeToString(payloadV11)
-            val lastSnapshotBytes = payloadJson.toByteArray(StandardCharsets.UTF_8)
-            schedulePublish(payloadV11, lastSnapshotBytes)
-            val queueSize = offlineQueue.size()
-            val queueSizeMB = offlineQueue.sizeInMB()
-
-            val location = gnssSnapshot.location
-            TelemetryStateStore.update { state ->
-                state.copy(
-                    operatorId = operatorId,
-                    operatorName = operatorName,
-                    equipmentTag = equipmentTag,
-                    sequence = seq,
-                    queueSize = queueSize,
-                    offlineQueueSizeMB = queueSizeMB,
-                    lastLatitude = location?.latitude?.toFloat(),
-                    lastLongitude = location?.longitude?.toFloat(),
-                    lastSpeed = location?.speed?.toFloat(),
-                    lastArms = imuSnapshot.rmsAcceleration,
-                    lastAltitude = location?.altitude?.toFloat(),
-                    lastAccuracy = location?.accuracy,
-                    lastVerticalAccuracy = location?.verticalAccuracyMeters,
-                    lastSpeedAccuracy = location?.speedAccuracyMetersPerSecond,
-                    lastBearing = location?.bearing?.toFloat(),
-                    lastBearingAccuracy = location?.bearingAccuracyDegrees,
-                    lastProvider = location?.provider ?: gnssSnapshot.provider,
-                    satellitesVisible = gnssSnapshot.satellitesVisible,
-                    satellitesUsed = gnssSnapshot.satellitesUsed,
-                    cn0Average = gnssSnapshot.cn0Average,
-                    gnssElapsedRealtimeNanos = extras.gnss.elapsedRealtimeNanos,
-                    hasL5 = gnssSnapshot.hasL5,
-                    hdop = gnssSnapshot.hdop,
-                    vdop = gnssSnapshot.vdop,
-                    pdop = gnssSnapshot.pdop,
-                    gnssRawSupported = gnssSnapshot.gnssRawSupported,
-                    gnssRawCount = gnssSnapshot.gnssRawCount,
-                    baroPressureHpa = extras.barometerPressureHpa,
-                    baroAltitudeMeters = extras.barometerAltitudeMeters,
-                    gnssCn0Min = extras.gnss.cn0Min,
-                    gnssCn0Max = extras.gnss.cn0Max,
-                    gnssCn0P25 = extras.gnss.cn0Percentile25,
-                    gnssCn0P50 = extras.gnss.cn0Median,
-                    gnssCn0P75 = extras.gnss.cn0Percentile75,
-                    gnssGpsVisible = extras.gnss.gpsVisible,
-                    gnssGpsUsed = extras.gnss.gpsUsed,
-                    gnssGlonassVisible = extras.gnss.glonassVisible,
-                    gnssGlonassUsed = extras.gnss.glonassUsed,
-                    gnssGalileoVisible = extras.gnss.galileoVisible,
-                    gnssGalileoUsed = extras.gnss.galileoUsed,
-                    gnssBeidouVisible = extras.gnss.beidouVisible,
-                    gnssBeidouUsed = extras.gnss.beidouUsed,
-                    gnssQzssVisible = extras.gnss.qzssVisible,
-                    gnssQzssUsed = extras.gnss.qzssUsed,
-                    gnssSbasVisible = extras.gnss.sbasVisible,
-                    gnssSbasUsed = extras.gnss.sbasUsed,
-                    gnssRawGpsCount = extras.gnss.rawGpsCount,
-                    gnssRawGlonassCount = extras.gnss.rawGlonassCount,
-                    gnssRawGalileoCount = extras.gnss.rawGalileoCount,
-                    gnssRawBeidouCount = extras.gnss.rawBeidouCount,
-                    gnssRawQzssCount = extras.gnss.rawQzssCount,
-                    gnssRawSbasCount = extras.gnss.rawSbasCount,
-                    lastAx = imuSnapshot.ax,
-                    lastAy = imuSnapshot.ay,
-                    lastAz = imuSnapshot.az,
-                    lastGx = imuSnapshot.gx,
-                    lastGy = imuSnapshot.gy,
-                    lastGz = imuSnapshot.gz,
-                    lastPitch = imuSnapshot.pitch,
-                    lastRoll = imuSnapshot.roll,
-                    lastYaw = imuSnapshot.yaw,
-                    lastJerk = imuSnapshot.rmsJerk,
-                    lastYawRate = imuSnapshot.yawRateMean,
-                    imuSamples = imuSnapshot.sampleCount,
-                    imuHz = imuSnapshot.effectiveHz,
-                    lastMessageTimestampUtc = nowUtc,
-                    lastUpdatedMillis = System.currentTimeMillis(),
-                    lastPayloadJson = payloadJson,
-                    imuQuaternionW = extras.imu.quaternion?.w,
-                    imuQuaternionX = extras.imu.quaternion?.x,
-                    imuQuaternionY = extras.imu.quaternion?.y,
-                    imuQuaternionZ = extras.imu.quaternion?.z,
-                    imuAccelerometerAccuracy = extras.imu.accelerometerAccuracy.takeIf { it >= 0 },
-                    imuGyroscopeAccuracy = extras.imu.gyroscopeAccuracy.takeIf { it >= 0 },
-                    imuRotationAccuracy = extras.imu.rotationAccuracy.takeIf { it >= 0 },
-                    imuMotionStationary = extras.imu.stationary,
-                    imuMotionShockLevel = extras.imu.shockLevel,
-                    imuMotionShockScore = extras.imu.shockScore,
-                    linearAccXMean = extras.imu.linearAccelerationStats.x.mean,
-                    linearAccXRms = extras.imu.linearAccelerationStats.x.rms,
-                    linearAccXMin = extras.imu.linearAccelerationStats.x.min,
-                    linearAccXMax = extras.imu.linearAccelerationStats.x.max,
-                    linearAccXSigma = extras.imu.linearAccelerationStats.x.sigma,
-                    linearAccYMean = extras.imu.linearAccelerationStats.y.mean,
-                    linearAccYRms = extras.imu.linearAccelerationStats.y.rms,
-                    linearAccYMin = extras.imu.linearAccelerationStats.y.min,
-                    linearAccYMax = extras.imu.linearAccelerationStats.y.max,
-                    linearAccYSigma = extras.imu.linearAccelerationStats.y.sigma,
-                    linearAccZMean = extras.imu.linearAccelerationStats.z.mean,
-                    linearAccZRms = extras.imu.linearAccelerationStats.z.rms,
-                    linearAccZMin = extras.imu.linearAccelerationStats.z.min,
-                    linearAccZMax = extras.imu.linearAccelerationStats.z.max,
-                    linearAccZSigma = extras.imu.linearAccelerationStats.z.sigma,
-                    linearAccNormRms = extras.imu.linearAccelerationNorm.rms,
-                    linearAccNormSigma = extras.imu.linearAccelerationNorm.sigma,
-                    magnetometerXMean = extras.imu.magnetometerStats.x.mean,
-                    magnetometerXRms = extras.imu.magnetometerStats.x.rms,
-                    magnetometerXMin = extras.imu.magnetometerStats.x.min,
-                    magnetometerXMax = extras.imu.magnetometerStats.x.max,
-                    magnetometerXSigma = extras.imu.magnetometerStats.x.sigma,
-                    magnetometerYMean = extras.imu.magnetometerStats.y.mean,
-                    magnetometerYRms = extras.imu.magnetometerStats.y.rms,
-                    magnetometerYMin = extras.imu.magnetometerStats.y.min,
-                    magnetometerYMax = extras.imu.magnetometerStats.y.max,
-                    magnetometerYSigma = extras.imu.magnetometerStats.y.sigma,
-                    magnetometerZMean = extras.imu.magnetometerStats.z.mean,
-                    magnetometerZRms = extras.imu.magnetometerStats.z.rms,
-                    magnetometerZMin = extras.imu.magnetometerStats.z.min,
-                    magnetometerZMax = extras.imu.magnetometerStats.z.max,
-                    magnetometerZSigma = extras.imu.magnetometerStats.z.sigma,
-                    magnetometerFieldStrength = extras.imu.magnetometerFieldStrength,
-                    lastPayload = payloadV11
+            dispatchTelemetry(
+                payload = payload,
+                payloadV11 = payloadV11,
+                imuSnapshot = imuSnapshot,
+                gnssSnapshot = gnssSnapshot,
+                extras = extras,
+                updateCaches = true,
+                notify = true
+            )
+            val loopElapsed = nowMono() - frameStart
+            if (loopElapsed > PERIOD_MS) {
+                Timber.w(
+                    "Telemetry tick exceeded period: elapsed=%dms target=%d",
+                    loopElapsed,
+                    targetMono
                 )
             }
+        } catch (t: Throwable) {
+            Timber.e(t, "Telemetry tick failed")
+        }
+    }
+
+    private suspend fun emitMissedTick(timestampUtc: Long) {
+        val baseImu = lastImuSnapshot ?: ImuSnapshot.EMPTY
+        val baseGnss = lastGnssSnapshot ?: GnssSnapshot.EMPTY
+        val seq = idProvider.nextSequence()
+        val payload = buildPayload(
+            tsUtc = timestampUtc,
+            elapsedRealtimeNanos = Time.elapsedRealtimeNanos(),
+            seq = seq,
+            imu = baseImu,
+            gnss = baseGnss,
+            status = STATUS_MISSED,
+            origin = ORIGIN_SYNTH
+        )
+        val extras = TelemetryMappers.Extras(
+            equipmentTag = equipmentTag.takeIf { it.isNotBlank() },
+            truckStatus = TelemetryStateStore.state.value.truckStatus,
+            barometerPressureHpa = baseImu.pressure.takeIf { it != 0f },
+            barometerAltitudeMeters = baseImu.altitudeBaro.takeIf { it != 0f },
+            gnss = TelemetryMappers.GnssExtras(
+                elapsedRealtimeNanos = baseGnss.elapsedRealtimeNanos.takeIf { it != 0L },
+                cn0Min = baseGnss.cn0Min,
+                cn0Max = baseGnss.cn0Max,
+                cn0Percentile25 = baseGnss.cn0Percentile25,
+                cn0Median = baseGnss.cn0Median,
+                cn0Percentile75 = baseGnss.cn0Percentile75,
+                gpsVisible = baseGnss.gpsVisible,
+                gpsUsed = baseGnss.gpsUsed,
+                glonassVisible = baseGnss.glonassVisible,
+                glonassUsed = baseGnss.glonassUsed,
+                galileoVisible = baseGnss.galileoVisible,
+                galileoUsed = baseGnss.galileoUsed,
+                beidouVisible = baseGnss.beidouVisible,
+                beidouUsed = baseGnss.beidouUsed,
+                qzssVisible = baseGnss.qzssVisible,
+                qzssUsed = baseGnss.qzssUsed,
+                sbasVisible = baseGnss.sbasVisible,
+                sbasUsed = baseGnss.sbasUsed,
+                rawGpsCount = baseGnss.rawGpsCount,
+                rawGlonassCount = baseGnss.rawGlonassCount,
+                rawGalileoCount = baseGnss.rawGalileoCount,
+                rawBeidouCount = baseGnss.rawBeidouCount,
+                rawQzssCount = baseGnss.rawQzssCount,
+                rawSbasCount = baseGnss.rawSbasCount,
+                rawSnapshot = baseGnss.raw
+            ),
+            imu = TelemetryMappers.ImuExtras(
+                quaternion = baseImu.quaternion.takeIf { baseImu.sampleCount > 0 },
+                accelerometerAccuracy = baseImu.accelerometerAccuracy,
+                gyroscopeAccuracy = baseImu.gyroscopeAccuracy,
+                rotationAccuracy = baseImu.rotationAccuracy,
+                stationary = determineStationary(baseImu, baseGnss),
+                shockLevel = determineShockLevel(baseImu),
+                shockScore = baseImu.rmsJerk.takeIf { baseImu.sampleCount > 0 && it.isFinite() },
+                linearAccelerationStats = baseImu.linearAccelerationStats,
+                linearAccelerationNorm = baseImu.linearAccelerationNormStats,
+                magnetometerStats = baseImu.magnetometerStats,
+                magnetometerNorm = baseImu.magnetometerNormStats,
+                magnetometerFieldStrength = baseImu.magnetometerFieldStrength
+            )
+        )
+        val payloadV11 = TelemetryMappers.fromLegacy(payload, baseImu, extras)
+        dispatchTelemetry(
+            payload = payload,
+            payloadV11 = payloadV11,
+            imuSnapshot = baseImu,
+            gnssSnapshot = baseGnss,
+            extras = extras,
+            updateCaches = false,
+            notify = false
+        )
+        Timber.w("Recorded missed telemetry tick at %d", timestampUtc)
+    }
+
+    private suspend fun dispatchTelemetry(
+        payload: TelemetryPayload,
+        payloadV11: TelemetryPayloadV11,
+        imuSnapshot: ImuSnapshot?,
+        gnssSnapshot: GnssSnapshot?,
+        extras: TelemetryMappers.Extras,
+        updateCaches: Boolean,
+        notify: Boolean
+    ) {
+        lastTelemetryPayload = payload
+        lastTelemetryPayloadV11 = payloadV11
+        if (updateCaches) {
+            imuSnapshot?.let { lastImuSnapshot = it }
+            gnssSnapshot?.let { lastGnssSnapshot = it }
+        }
+        serviceScope.launch { writeCsv(payload) }
+        val payloadJson = json.encodeToString(payloadV11)
+        val lastSnapshotBytes = payloadJson.toByteArray(StandardCharsets.UTF_8)
+        schedulePublish(payloadV11, lastSnapshotBytes)
+        val queueStats = offlineQueue.currentStats()
+        val location = gnssSnapshot?.location
+        TelemetryStateStore.update { state ->
+            state.copy(
+                operatorId = operatorId,
+                operatorName = operatorName,
+                equipmentTag = equipmentTag,
+                sequence = payload.sequence,
+                queueSize = queueStats.count,
+                offlineQueueSizeMB = queueStats.sizeMb,
+                lastLatitude = location?.latitude?.toFloat() ?: state.lastLatitude,
+                lastLongitude = location?.longitude?.toFloat() ?: state.lastLongitude,
+                lastSpeed = location?.speed?.toFloat() ?: state.lastSpeed,
+                lastArms = imuSnapshot?.rmsAcceleration ?: state.lastArms,
+                lastAltitude = location?.altitude?.toFloat() ?: state.lastAltitude,
+                lastAccuracy = location?.accuracy ?: state.lastAccuracy,
+                lastVerticalAccuracy = location?.verticalAccuracyMeters ?: state.lastVerticalAccuracy,
+                lastSpeedAccuracy = location?.speedAccuracyMetersPerSecond ?: state.lastSpeedAccuracy,
+                lastBearing = location?.bearing?.toFloat() ?: state.lastBearing,
+                lastBearingAccuracy = location?.bearingAccuracyDegrees ?: state.lastBearingAccuracy,
+                lastProvider = location?.provider ?: gnssSnapshot?.provider ?: state.lastProvider,
+                satellitesVisible = gnssSnapshot?.satellitesVisible ?: state.satellitesVisible,
+                satellitesUsed = gnssSnapshot?.satellitesUsed ?: state.satellitesUsed,
+                cn0Average = gnssSnapshot?.cn0Average ?: state.cn0Average,
+                gnssElapsedRealtimeNanos = extras.gnss.elapsedRealtimeNanos ?: state.gnssElapsedRealtimeNanos,
+                hasL5 = gnssSnapshot?.hasL5 ?: state.hasL5,
+                hdop = gnssSnapshot?.hdop ?: state.hdop,
+                vdop = gnssSnapshot?.vdop ?: state.vdop,
+                pdop = gnssSnapshot?.pdop ?: state.pdop,
+                gnssRawSupported = gnssSnapshot?.gnssRawSupported ?: state.gnssRawSupported,
+                gnssRawCount = gnssSnapshot?.gnssRawCount ?: state.gnssRawCount,
+                baroPressureHpa = extras.barometerPressureHpa ?: state.baroPressureHpa,
+                baroAltitudeMeters = extras.barometerAltitudeMeters ?: state.baroAltitudeMeters,
+                lastAx = imuSnapshot?.ax ?: state.lastAx,
+                lastAy = imuSnapshot?.ay ?: state.lastAy,
+                lastAz = imuSnapshot?.az ?: state.lastAz,
+                lastGx = imuSnapshot?.gx ?: state.lastGx,
+                lastGy = imuSnapshot?.gy ?: state.lastGy,
+                lastGz = imuSnapshot?.gz ?: state.lastGz,
+                lastPitch = imuSnapshot?.pitch ?: state.lastPitch,
+                lastRoll = imuSnapshot?.roll ?: state.lastRoll,
+                lastYaw = imuSnapshot?.yaw ?: state.lastYaw,
+                lastJerk = imuSnapshot?.rmsJerk ?: state.lastJerk,
+                lastYawRate = imuSnapshot?.yawRateMean ?: state.lastYawRate,
+                imuSamples = imuSnapshot?.sampleCount ?: state.imuSamples,
+                imuHz = imuSnapshot?.effectiveHz ?: state.imuHz,
+                imuQuaternionW = extras.imu.quaternion?.w ?: state.imuQuaternionW,
+                imuQuaternionX = extras.imu.quaternion?.x ?: state.imuQuaternionX,
+                imuQuaternionY = extras.imu.quaternion?.y ?: state.imuQuaternionY,
+                imuQuaternionZ = extras.imu.quaternion?.z ?: state.imuQuaternionZ,
+                imuAccelerometerAccuracy = extras.imu.accelerometerAccuracy.takeIf { it >= 0 }
+                    ?: state.imuAccelerometerAccuracy,
+                imuGyroscopeAccuracy = extras.imu.gyroscopeAccuracy.takeIf { it >= 0 }
+                    ?: state.imuGyroscopeAccuracy,
+                imuRotationAccuracy = extras.imu.rotationAccuracy.takeIf { it >= 0 }
+                    ?: state.imuRotationAccuracy,
+                imuMotionStationary = extras.imu.stationary ?: state.imuMotionStationary,
+                imuMotionShockLevel = extras.imu.shockLevel ?: state.imuMotionShockLevel,
+                imuMotionShockScore = extras.imu.shockScore ?: state.imuMotionShockScore,
+                linearAccXMean = extras.imu.linearAccelerationStats.x.mean ?: state.linearAccXMean,
+                linearAccXRms = extras.imu.linearAccelerationStats.x.rms ?: state.linearAccXRms,
+                linearAccXMin = extras.imu.linearAccelerationStats.x.min ?: state.linearAccXMin,
+                linearAccXMax = extras.imu.linearAccelerationStats.x.max ?: state.linearAccXMax,
+                linearAccXSigma = extras.imu.linearAccelerationStats.x.sigma ?: state.linearAccXSigma,
+                linearAccYMean = extras.imu.linearAccelerationStats.y.mean ?: state.linearAccYMean,
+                linearAccYRms = extras.imu.linearAccelerationStats.y.rms ?: state.linearAccYRms,
+                linearAccYMin = extras.imu.linearAccelerationStats.y.min ?: state.linearAccYMin,
+                linearAccYMax = extras.imu.linearAccelerationStats.y.max ?: state.linearAccYMax,
+                linearAccYSigma = extras.imu.linearAccelerationStats.y.sigma ?: state.linearAccYSigma,
+                linearAccZMean = extras.imu.linearAccelerationStats.z.mean ?: state.linearAccZMean,
+                linearAccZRms = extras.imu.linearAccelerationStats.z.rms ?: state.linearAccZRms,
+                linearAccZMin = extras.imu.linearAccelerationStats.z.min ?: state.linearAccZMin,
+                linearAccZMax = extras.imu.linearAccelerationStats.z.max ?: state.linearAccZMax,
+                linearAccZSigma = extras.imu.linearAccelerationStats.z.sigma ?: state.linearAccZSigma,
+                linearAccNormRms = extras.imu.linearAccelerationNorm.rms ?: state.linearAccNormRms,
+                linearAccNormSigma = extras.imu.linearAccelerationNorm.sigma ?: state.linearAccNormSigma,
+                magnetometerXMean = extras.imu.magnetometerStats.x.mean ?: state.magnetometerXMean,
+                magnetometerXRms = extras.imu.magnetometerStats.x.rms ?: state.magnetometerXRms,
+                magnetometerXMin = extras.imu.magnetometerStats.x.min ?: state.magnetometerXMin,
+                magnetometerXMax = extras.imu.magnetometerStats.x.max ?: state.magnetometerXMax,
+                magnetometerXSigma = extras.imu.magnetometerStats.x.sigma ?: state.magnetometerXSigma,
+                magnetometerYMean = extras.imu.magnetometerStats.y.mean ?: state.magnetometerYMean,
+                magnetometerYRms = extras.imu.magnetometerStats.y.rms ?: state.magnetometerYRms,
+                magnetometerYMin = extras.imu.magnetometerStats.y.min ?: state.magnetometerYMin,
+                magnetometerYMax = extras.imu.magnetometerStats.y.max ?: state.magnetometerYMax,
+                magnetometerYSigma = extras.imu.magnetometerStats.y.sigma ?: state.magnetometerYSigma,
+                magnetometerZMean = extras.imu.magnetometerStats.z.mean ?: state.magnetometerZMean,
+                magnetometerZRms = extras.imu.magnetometerStats.z.rms ?: state.magnetometerZRms,
+                magnetometerZMin = extras.imu.magnetometerStats.z.min ?: state.magnetometerZMin,
+                magnetometerZMax = extras.imu.magnetometerStats.z.max ?: state.magnetometerZMax,
+                magnetometerZSigma = extras.imu.magnetometerStats.z.sigma ?: state.magnetometerZSigma,
+                magnetometerFieldStrength = extras.imu.magnetometerFieldStrength ?: state.magnetometerFieldStrength,
+                lastPayloadJson = payloadJson,
+                lastPayload = payloadV11,
+                lastStatus = payload.status ?: state.lastStatus,
+                lastOrigin = payload.origin ?: state.lastOrigin,
+                lastMessageTimestampUtc = payload.timestampUtc,
+                lastUpdatedMillis = System.currentTimeMillis()
+            )
+        }
+        if (notify && payload.status != STATUS_MISSED) {
             updateNotification(payload)
-            val loopElapsed = SystemClock.elapsedRealtime() - frameStart
-            val sleep = PERIOD_MS - loopElapsed
-            if (sleep > 0) {
-                delay(sleep)
-            } else {
-                delay(0L)
+        }
+    }
+
+    private fun handleCsvArchive(file: File) {
+        val now = System.currentTimeMillis()
+        val sizeBytes = file.length()
+        TelemetryStateStore.update { state ->
+            state.copy(
+                csvRotationCount = state.csvRotationCount + 1,
+                lastCsvRotateAtMillis = now,
+                lastCsvRotateFile = file.name,
+                lastCsvRotateBytes = sizeBytes
+            )
+        }
+        val uploader = minioUploader ?: return
+        val objectKey = "csv/${BuildConfig.DEVICE_ID}/${file.name}"
+        serviceScope.launch(Dispatchers.IO) {
+            val result = uploader.upload(file, objectKey)
+            val success = result.success
+            val error = result.error
+            if (success) {
+                val deleted = file.delete()
+                if (!deleted) {
+                    Timber.w("Failed to delete archived CSV %s after upload", file.name)
+                }
+            }
+            val uploadNow = System.currentTimeMillis()
+            TelemetryStateStore.update { state ->
+                state.copy(
+                    csvUploadAttemptCount = state.csvUploadAttemptCount + 1,
+                    csvUploadSuccessCount = state.csvUploadSuccessCount + if (success) 1 else 0,
+                    csvUploadFailureCount = state.csvUploadFailureCount + if (success) 0 else 1,
+                    lastCsvUploadAtMillis = uploadNow,
+                    lastCsvUploadObjectKey = objectKey,
+                    lastCsvUploadError = if (success) null else error
+                )
             }
         }
     }
 
+    private fun createMinioUploader(): MinioUploader? {
+        val endpoint = BuildConfig.MINIO_ENDPOINT.trim()
+        val accessKey = BuildConfig.MINIO_ACCESS_KEY.trim()
+        val secretKey = BuildConfig.MINIO_SECRET_KEY.trim()
+        val bucket = BuildConfig.MINIO_BUCKET.trim()
+        val region = BuildConfig.MINIO_REGION.trim().ifEmpty { "us-east-1" }
+        if (endpoint.isEmpty() || accessKey.isEmpty() || secretKey.isEmpty() || bucket.isEmpty()) {
+            Timber.i("MinIO uploader disabled: missing configuration")
+            return null
+        }
+        return runCatching {
+            MinioUploader(endpoint, accessKey, secretKey, bucket, region)
+        }.onFailure { Timber.w(it, "Failed to initialize MinIO uploader") }
+            .getOrNull()
+    }
+
     private suspend fun writeCsv(payload: TelemetryPayload) {
-        withContext(Dispatchers.IO) {
-            csvWriter.append(payload.toCsvRow())
+        val ok = csvWriter.append(payload.toCsvRow())
+        if (!ok) {
+            Timber.w("CSV write failed for seq=%d", payload.sequence)
+            val failureAt = System.currentTimeMillis()
+            TelemetryStateStore.update { state ->
+                state.copy(
+                    csvFailures = state.csvFailures + 1,
+                    lastCsvFailureSequence = payload.sequence,
+                    lastCsvFailureAtMillis = failureAt
+                )
+            }
         }
     }
 
     private fun schedulePublish(payload: TelemetryPayloadV11, lastSnapshotBytes: ByteArray) {
         serviceScope.launch {
-            val publishResults = withTimeoutOrNull(MQTT_PUBLISH_TIMEOUT_MS) {
-                mqttPublisher.publishTelemetry(
-                    payload.deviceId,
-                    payload,
-                    lastSnapshot = lastSnapshotBytes
-                )
-            }
-            if (publishResults == null) {
-                Timber.w("MQTT publish timed out for seq=%d", payload.sequenceId)
-            }
             val enabledTargets = mqttPublisher.enabledLabels()
-            android.util.Log.i("TelemetryService", "Enabled targets: $enabledTargets")
+            if (enabledTargets.isEmpty()) {
+                val now = System.currentTimeMillis()
+                TelemetryStateStore.update { state ->
+                    state.copy(
+                        enqueueFailures = state.enqueueFailures + 1,
+                        lastEnqueueFailureSequence = payload.sequenceId,
+                        lastEnqueueFailureReason = "no_targets",
+                        lastEnqueueFailureAtMillis = now
+                    )
+                }
+                Timber.w("Skipping telemetry publish | seq=%d reason=no_targets", payload.sequenceId)
+                return@launch
+            }
+
+            val publishAttempt = if (!isOnWifi()) {
+                Timber.i("Skipping live publish for seq=%d: active network is not Wi-Fi", payload.sequenceId)
+                Result.failure<Map<String, Boolean>>(NotOnWifiException)
+            } else {
+                runCatching {
+                    withTimeoutOrNull(MQTT_PUBLISH_TIMEOUT_MS) {
+                        mqttPublisher.publishTelemetry(
+                            payload.deviceId,
+                            payload,
+                            lastSnapshot = lastSnapshotBytes
+                        )
+                    } ?: throw CancellationException("MQTT publish timed out")
+                }
+            }
+
+            val publishResults = publishAttempt.getOrNull()
             val failedTargets = if (publishResults == null) {
                 enabledTargets
             } else {
                 enabledTargets.filter { publishResults[it] != true }.toSet()
             }
-            android.util.Log.i("TelemetryService", "Failed targets for seq=${payload.sequenceId}: $failedTargets (size=${failedTargets.size})")
-            if (failedTargets.isNotEmpty()) {
-                val errorTag = if (publishResults == null) "publish_timeout" else "publish_failed"
-                android.util.Log.i("TelemetryService", "Calling enqueue for seq=${payload.sequenceId}...")
-                val stored = offlineQueue.enqueue(payload, failedTargets, errorTag)
-                android.util.Log.i("TelemetryService", "Enqueue completed: stored=$stored")
-                if (stored) {
-                    drainTrigger.trySend(Unit)
-                } else {
-                    Timber.w("Offline queue drop for seq=%d: daily limit reached", payload.sequenceId)
+
+            if (failedTargets.isEmpty()) {
+                resetAutoReconnectBackoff()
+                Timber.d("MQTT publish succeeded | seq=%d", payload.sequenceId)
+                return@launch
+            }
+
+            val errorTag = when (publishAttempt.exceptionOrNull()) {
+                is TimeoutCancellationException -> "publish_timeout"
+                is NotOnWifiException -> "not_on_wifi"
+                null -> "publish_failed"
+                else -> "publish_exception"
+            }
+            publishAttempt.exceptionOrNull()?.let {
+                Timber.w(it, "MQTT publish failed for seq=%d", payload.sequenceId)
+            }
+
+            val stored = offlineQueue.enqueue(payload, failedTargets, errorTag)
+            val now = System.currentTimeMillis()
+            if (stored) {
+                drainTrigger.tryEmit(Unit)
+                TelemetryStateStore.update { state ->
+                    state.copy(
+                        lastQueueEnqueuedSequence = payload.sequenceId,
+                        lastQueueEnqueuedReason = errorTag,
+                        lastQueueEnqueuedAtMillis = now
+                    )
                 }
             } else {
-                android.util.Log.i("TelemetryService", "No failed targets for seq=${payload.sequenceId}, skipping enqueue")
+                TelemetryStateStore.update { state ->
+                    state.copy(
+                        enqueueFailures = state.enqueueFailures + 1,
+                        lastEnqueueFailureSequence = payload.sequenceId,
+                        lastEnqueueFailureReason = errorTag,
+                        lastEnqueueFailureAtMillis = now
+                    )
+                }
             }
+            Timber.w(
+                "Telemetry enqueued offline | seq=%d targets=%s stored=%s reason=%s",
+                payload.sequenceId,
+                failedTargets,
+                stored,
+                errorTag
+            )
         }
     }
 
@@ -647,25 +1144,57 @@ class TelemetryService : LifecycleService() {
         var backoff = DRAIN_MIN_BACKOFF_MS
         while (serviceScope.isActive) {
             val outcome = drainOfflineBatch()
-            
-            // Hybrid trigger: Recalculate after processing messages
+
             if (outcome.processed > 0) {
-                offlineQueue.recalculateSize()
+                val stats = offlineQueue.recalculateStats()
+                Timber.i(
+                    "Offline queue drained batch | processed=%d remaining=%d size=%.2fMB",
+                    outcome.processed,
+                    stats.count,
+                    stats.sizeMb
+                )
+                val now = System.currentTimeMillis()
+                TelemetryStateStore.update { state ->
+                    state.copy(
+                        lastQueueDrainCount = outcome.processed,
+                        lastQueueDrainAtMillis = now,
+                        lastQueueDrainRemaining = stats.count,
+                        queueSize = stats.count,
+                        offlineQueueSizeMB = stats.sizeMb
+                    )
+                }
+                backoff = DRAIN_MIN_BACKOFF_MS
+                continue
             }
-            
+
             if (outcome.remaining == 0) {
                 backoff = DRAIN_MIN_BACKOFF_MS
+                TelemetryStateStore.update { state ->
+                    state.copy(
+                        lastQueueDrainCount = 0,
+                        lastQueueDrainRemaining = 0,
+                        lastQueueDrainAtMillis = System.currentTimeMillis(),
+                        queueSize = 0,
+                        offlineQueueSizeMB = 0f
+                    )
+                }
                 if (waitForDrainTrigger(DRAIN_IDLE_INTERVAL_MS)) {
                     return
                 }
                 continue
             }
-            if (outcome.processed > 0) {
-                backoff = DRAIN_MIN_BACKOFF_MS
-                continue
-            }
+
             val delayMillis = jitterDelay(backoff)
             backoff = min(backoff * 2, DRAIN_MAX_BACKOFF_MS)
+
+            if (outcome.blocked) {
+                Timber.w(
+                    "Offline queue drain blocked; waiting for network recovery | remaining=%d nextDelay=%dms",
+                    outcome.remaining,
+                    delayMillis
+                )
+            }
+
             if (waitForDrainTrigger(delayMillis)) {
                 return
             }
@@ -686,16 +1215,15 @@ class TelemetryService : LifecycleService() {
             }
         }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun waitForDrainTrigger(timeoutMs: Long): Boolean {
-        var channelClosed = false
-        select<Unit> {
-            drainTrigger.onReceiveCatching { result ->
-                channelClosed = result.isClosed
-            }
-            onTimeout(timeoutMs) {}
+        if (!serviceScope.isActive) return true
+        if (timeoutMs <= 0L) {
+            return !serviceScope.isActive
         }
-        return channelClosed
+        withTimeoutOrNull(timeoutMs) {
+            drainTrigger.first()
+        }
+        return !serviceScope.isActive
     }
 
     private fun jitterDelay(base: Long): Long {
@@ -710,7 +1238,9 @@ class TelemetryService : LifecycleService() {
         elapsedRealtimeNanos: Long,
         seq: Long,
         imu: ImuSnapshot,
-        gnss: GnssSnapshot
+        gnss: GnssSnapshot,
+        status: String? = null,
+        origin: String? = null
     ): TelemetryPayload {
         val deviceId = BuildConfig.DEVICE_ID.takeIf { it.isNotBlank() } ?: idProvider.deviceId
         val location = gnss.location
@@ -757,6 +1287,8 @@ class TelemetryService : LifecycleService() {
             alt_baro = imu.altitudeBaro,
             gnss_raw_supported = gnss.gnssRawSupported,
             gnss_raw_count = gnss.gnssRawCount,
+            status = status,
+            origin = origin,
             timestamp = Time.formatUtc(tsUtc)
         )
     }
@@ -794,22 +1326,30 @@ class TelemetryService : LifecycleService() {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val title = if (isRunning) getString(R.string.notification_title_active) else getString(R.string.notification_title_idle)
-        val text = payload?.let {
-            "seq=${it.sequence} | lat=${"%.5f".format(it.latitude)} | a_rms=${"%.3f".format(it.a_rms_total)}"
-        } ?: getString(R.string.notification_text_idle)
+        val awaitingConfig = awaitingOperatorConfig && !isRunning
+        val title = when {
+            isRunning -> getString(R.string.notification_title_active)
+            awaitingConfig -> getString(R.string.notification_title_idle)
+            else -> getString(R.string.notification_title_idle)
+        }
+        val text = when {
+            awaitingConfig -> getString(R.string.text_operator_required)
+            payload != null -> "seq=${payload.sequence} | lat=${"%.5f".format(payload.latitude)} | a_rms=${"%.3f".format(payload.a_rms_total)}"
+            else -> getString(R.string.notification_text_idle)
+        }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setSmallIcon(R.drawable.ic_stat_logger)
             .setContentIntent(pendingIntent)
-            .setOngoing(isRunning)
+            .setOngoing(isRunning || awaitingConfig)
             .setOnlyAlertOnce(!initial)
             .build()
     }
 
     private fun updateNotification(payload: TelemetryPayload? = null) {
-        if (!isRunning) return
+        if (!isRunning && !awaitingOperatorConfig) return
         notificationManager.notify(NOTIFICATION_ID, buildNotification(payload))
     }
 
@@ -824,6 +1364,14 @@ class TelemetryService : LifecycleService() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(channel)
     }
+
+    private data class NetworkSnapshot(
+        val connected: Boolean,
+        val transport: String?,
+        val validated: Boolean
+    )
+
+    private object NotOnWifiException : IllegalStateException("Active network is not Wi-Fi")
 
     companion object {
         const val ACTION_START = "com.example.sensorlogger.action.START"
@@ -843,9 +1391,22 @@ class TelemetryService : LifecycleService() {
         private const val DRAIN_MAX_BACKOFF_MS = 300_000L
         private const val DRAIN_IDLE_INTERVAL_MS = 60_000L
         private const val DRAIN_BATCH_SIZE = 500
-        private const val MQTT_PUBLISH_TIMEOUT_MS = 1_500L
+        private const val MQTT_PUBLISH_TIMEOUT_MS = 500L  // Quick timeout for faster offline detection
         private const val AUTO_RECONNECT_INITIAL_DELAY_MS = 5_000L
         private const val AUTO_RECONNECT_MAX_DELAY_MS = 60_000L
+        private const val MAX_CATCH_UP_TICKS = 35L
+        private const val BATTERY_PREFS = "telemetry_runtime"
+        private const val KEY_BATTERY_OPT_PROMPTED = "battery_opt_prompted"
+        private const val STATUS_OK = "ok"
+        private const val STATUS_MISSED = "missed_tick"
+        private const val ORIGIN_LIVE = "live"
+        private const val ORIGIN_SYNTH = "synth"
+        private val REQUIRED_PERMISSIONS = arrayOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.BODY_SENSORS,
+            Manifest.permission.ACTIVITY_RECOGNITION
+        )
 
         fun startIntent(
             context: Context,

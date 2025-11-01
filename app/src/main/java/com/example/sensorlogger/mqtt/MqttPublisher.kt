@@ -1,17 +1,28 @@
 package com.example.sensorlogger.mqtt
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.util.Log
 import com.example.sensorlogger.BuildConfig
 import com.example.sensorlogger.model.TelemetryPayloadV11
+import com.example.sensorlogger.net.BrokerGuard
+import com.example.sensorlogger.net.WifiBoundSocketFactory
 import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.eclipse.paho.client.mqttv3.DisconnectedBufferOptions
@@ -28,6 +39,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class MqttPublisher(
+    private val context: Context,
     private val json: Json = Json { encodeDefaults = true },
     private val deviceIdProvider: () -> String = { BuildConfig.DEVICE_ID }
 ) {
@@ -61,11 +73,18 @@ class MqttPublisher(
     )
     val statuses: StateFlow<Map<String, BrokerStatus>> = _statuses.asStateFlow()
 
+    private var keepAliveJob: Job? = null
+    @Volatile
+    private var consecutivePingFailures = 0
+    @Volatile
+    private var brokerVerified = false
     private var client: MqttAsyncClient? = null
     private var statusAnnounced: Boolean = false
     private var activeEndpoint: String? = null
     private var connectOptions: MqttConnectOptions? = null
     private var connectAwaiter: CompletableDeferred<Unit>? = null
+    private val expectedBrokerId = BuildConfig.BROKER_ID_EXPECTED
+    private val brokerSpkiPin = BuildConfig.BROKER_SPKI_PIN
 
     suspend fun publishTelemetry(
         deviceId: String,
@@ -82,6 +101,46 @@ class MqttPublisher(
             return@withLock mapOf(NAME_PRIMARY to false)
         }
 
+        if (!brokerVerified) {
+            brokerVerified = BrokerGuard.isVerified()
+        }
+
+        if (!isOnWifi()) {
+            Log.i(TAG, "publishTelemetry gated for device=$deviceId: active network is not Wi-Fi; enqueue offline")
+            updateStatus(BrokerStatus.State.Disconnected)
+            return@withLock mapOf(NAME_PRIMARY to false)
+        }
+
+        if (!brokerVerified) {
+            if (expectedBrokerId.isBlank()) {
+                Timber.w("Broker verification skipped: expected broker id is blank")
+                brokerVerified = true
+            } else {
+                val endpoint = activeEndpoint ?: endpoints.firstOrNull()
+                if (endpoint.isNullOrBlank()) {
+                    Timber.w("Broker verification aborted: no endpoint available")
+                    return@withLock mapOf(NAME_PRIMARY to false)
+                }
+                Timber.i("Verifying broker identity for endpoint %s", endpoint)
+                val verified = BrokerGuard.verify(
+                    context = context,
+                    brokerUrl = endpoint,
+                    clientIdProbe = "${clientId()}-probe",
+                    identityTopic = BROKER_IDENTITY_TOPIC,
+                    expectedBrokerId = expectedBrokerId,
+                    tlsSpkiPin = brokerSpkiPin.takeIf { it.isNotBlank() },
+                    username = BuildConfig.MQTT_USERNAME.takeIf { it.isNotBlank() },
+                    passwordChars = BuildConfig.MQTT_PASSWORD.takeIf { it.isNotBlank() }?.toCharArray()
+                )
+                if (!verified) {
+                    Timber.w("Broker verification failed for endpoint %s; enqueuing offline", endpoint)
+                    return@withLock mapOf(NAME_PRIMARY to false)
+                }
+                brokerVerified = true
+                Timber.i("Broker identity verified for endpoint %s", endpoint)
+            }
+        }
+
         val payloadBytes = json.encodeToString(payload).toByteArray(StandardCharsets.UTF_8)
         val ok = withContext(Dispatchers.IO) {
             runCatching {
@@ -95,23 +154,36 @@ class MqttPublisher(
             }.getOrElse { false }
         }
         if (ok) {
+            consecutivePingFailures = 0
             updateStatus(BrokerStatus.State.Connected)
         }
         mapOf(NAME_PRIMARY to ok)
+    }
+
+    fun resetVerification() {
+        brokerVerified = false
+        BrokerGuard.reset()
     }
 
     suspend fun disconnectAll(@Suppress("UNUSED_PARAMETER") deviceId: String?) = mutex.withLock {
         withContext(Dispatchers.IO) {
             closeClient(publishOffline = true)
             updateStatus(BrokerStatus.State.Disconnected)
+            consecutivePingFailures = 0
         }
     }
 
-    suspend fun reconnect() = mutex.withLock {
+    suspend fun reconnect(resetBackoff: Boolean = false) = mutex.withLock {
         withContext(Dispatchers.IO) {
+            if (resetBackoff) {
+                consecutivePingFailures = 0
+            }
             closeClient(publishOffline = true)
             runCatching { ensureConnected() }
-                .onSuccess { updateStatus(BrokerStatus.State.Connected) }
+                .onSuccess {
+                    consecutivePingFailures = 0
+                    updateStatus(BrokerStatus.State.Connected)
+                }
                 .onFailure {
                     Timber.w(it, "MQTT reconnection failed")
                     updateStatus(BrokerStatus.State.Failed)
@@ -119,8 +191,42 @@ class MqttPublisher(
         }
     }
 
+    fun startKeepAlive(scope: CoroutineScope) {
+        if (keepAliveJob?.isActive == true) return
+        keepAliveJob = scope.launch(Dispatchers.IO) {
+            try {
+                while (isActive) {
+                    delay(KEEP_ALIVE_INTERVAL_MS)
+                    when (performPing()) {
+                        PingResult.OK -> consecutivePingFailures = 0
+                        PingResult.DISCONNECTED -> consecutivePingFailures = 0
+                        PingResult.FAILED -> {
+                            consecutivePingFailures++
+                            if (consecutivePingFailures >= KEEP_ALIVE_FAILURE_THRESHOLD) {
+                                Timber.w(
+                                    "MQTT keep-alive ping failed %d times; triggering reconnect",
+                                    KEEP_ALIVE_FAILURE_THRESHOLD
+                                )
+                                consecutivePingFailures = 0
+                                runCatching { reconnect(resetBackoff = true) }
+                                    .onFailure { Timber.w(it, "MQTT reconnect after ping failure failed") }
+                            }
+                        }
+                    }
+                }
+            } finally {
+                keepAliveJob = null
+            }
+        }
+    }
+
+    fun stopKeepAlive() {
+        keepAliveJob?.cancel()
+        keepAliveJob = null
+    }
+
     fun enabledLabels(): Set<String> =
-        if (hasEndpoints()) setOf(NAME_PRIMARY) else emptySet()
+        if (hasEndpoints() || discoveryEnabled) setOf(NAME_PRIMARY) else emptySet()
 
     private suspend fun ensureConnected(): MqttAsyncClient {
         if (!hasEndpoints()) {
@@ -174,6 +280,8 @@ class MqttPublisher(
             .getOrNull()
             ?.takeIf { it.isNotBlank() }
             ?: endpoints.firstOrNull()
+
+
         publishStatus(mqttClient, STATUS_ONLINE)
         statusAnnounced = true
         Timber.i("MQTT connected")
@@ -213,6 +321,7 @@ class MqttPublisher(
 
     private suspend fun closeClient(publishOffline: Boolean) {
         val mqttClient = client ?: return
+        resetVerification()
         connectAwaiter?.cancel()
         connectAwaiter = null
         connectOptions = null
@@ -283,10 +392,8 @@ class MqttPublisher(
             null
         )
         val bufferOptions = DisconnectedBufferOptions().apply {
-            isBufferEnabled = true
-            bufferSize = DISCONNECTED_BUFFER_SIZE
+            isBufferEnabled = false  // Disable internal buffer - use OfflineQueue instead
             isPersistBuffer = false
-            isDeleteOldestMessages = true
         }
         mqttClient.setBufferOpts(bufferOptions)
         mqttClient.setCallback(object : MqttCallbackExtended {
@@ -320,7 +427,7 @@ class MqttPublisher(
 
     private fun buildConnectOptions(): MqttConnectOptions =
         MqttConnectOptions().apply {
-            isAutomaticReconnect = true
+            isAutomaticReconnect = false  // Disable Paho auto-reconnect - we handle it manually
             isCleanSession = true
             keepAliveInterval = 30
             connectionTimeout = 10
@@ -330,6 +437,7 @@ class MqttPublisher(
             if (BuildConfig.MQTT_PASSWORD.isNotBlank()) {
                 password = BuildConfig.MQTT_PASSWORD.toCharArray()
             }
+            socketFactory = WifiBoundSocketFactory.get(context)
             setWill(statusTopic(), STATUS_OFFLINE.toByteArray(StandardCharsets.UTF_8), 1, true)
             if (endpoints.size > 1) {
                 serverURIs = endpoints.toTypedArray()
@@ -368,11 +476,13 @@ class MqttPublisher(
         if (sanitized.isEmpty()) return
         if (sanitized == endpoints) return
         endpoints = sanitized
+        resetVerification()
         resetClient()
         updateStatus(BrokerStatus.State.Disconnected)
     }
 
     private fun resetClient() {
+        resetVerification()
         connectAwaiter?.cancel()
         connectAwaiter = null
         discoveryAttempted = false
@@ -389,29 +499,56 @@ class MqttPublisher(
         activeEndpoint = null
     }
 
-    private suspend fun suspendToken(block: (IMqttActionListener) -> IMqttToken) {
-        suspendCancellableCoroutine { continuation ->
-            val token = try {
-                block(object : IMqttActionListener {
-                    override fun onSuccess(asyncActionToken: IMqttToken?) {
-                        if (continuation.isActive) {
-                            continuation.resume(Unit)
-                        }
-                    }
+    private suspend fun performPing(): PingResult = mutex.withLock {
+        val mqttClient = client ?: return PingResult.DISCONNECTED
+        if (!mqttClient.isConnected) {
+            return PingResult.DISCONNECTED
+        }
+        return runCatching {
+            suspendToken { listener ->
+                mqttClient.checkPing(null, listener)
+            }
+            PingResult.OK
+        }.getOrElse { throwable ->
+            Timber.w(throwable, "MQTT keep-alive ping failed")
+            PingResult.FAILED
+        }
+    }
 
-                    override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
-                        if (continuation.isActive) {
-                            val cause = exception ?: MqttException(RuntimeException("MQTT action failed"))
-                            continuation.resumeWithException(cause)
-                        }
+    private suspend fun suspendToken(block: (IMqttActionListener) -> IMqttToken?) {
+        suspendCancellableCoroutine { continuation ->
+            var completedSynchronously = false
+            val listener = object : IMqttActionListener {
+                override fun onSuccess(asyncActionToken: IMqttToken?) {
+                    if (continuation.isActive) {
+                        continuation.resume(Unit)
                     }
-                })
+                }
+
+                override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                    if (continuation.isActive) {
+                        val cause = exception ?: MqttException(RuntimeException("MQTT action failed"))
+                        continuation.resumeWithException(cause)
+                    }
+                }
+            }
+            val token = try {
+                block(listener)
             } catch (ex: Exception) {
                 continuation.resumeWithException(ex)
                 return@suspendCancellableCoroutine
             }
-            continuation.invokeOnCancellation {
-                runCatching { token.waitForCompletion(500) }
+            if (token == null) {
+                // Some synchronous operations (e.g. checkPing on MQTT v5) complete without a token.
+                completedSynchronously = true
+                if (continuation.isActive) {
+                    continuation.resume(Unit)
+                }
+            }
+            if (!completedSynchronously) {
+                continuation.invokeOnCancellation {
+                    runCatching { token?.waitForCompletion(500) }
+                }
             }
         }
     }
@@ -431,14 +568,32 @@ class MqttPublisher(
         }
     }
 
+    private enum class PingResult {
+        OK,
+        FAILED,
+        DISCONNECTED
+    }
+
+    private fun isOnWifi(): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = cm.activeNetwork ?: return false
+        val capabilities = cm.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+    }
+
     companion object {
         const val NAME_PRIMARY = "primary"
+        private const val TAG = "MqttPublisher"
         private const val STATUS_ONLINE = "online"
         private const val STATUS_OFFLINE = "offline"
+        private const val BROKER_IDENTITY_TOPIC = "aurabrokeridentity"
         private const val CLIENT_ID_PREFIX = "sensorlogger-"
         private const val MAX_CLIENT_ID_LENGTH = 64
         private const val DEFAULT_DEVICE_ID = "sensorlogger-device"
         private val CLIENT_ID_SANITIZE_REGEX = "[^A-Za-z0-9_-]".toRegex()
         private const val DISCONNECTED_BUFFER_SIZE = 2048
+        private const val KEEP_ALIVE_INTERVAL_MS = 45_000L
+        private const val KEEP_ALIVE_FAILURE_THRESHOLD = 2
     }
 }
+

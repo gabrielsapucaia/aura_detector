@@ -20,6 +20,9 @@ val properties = Properties().apply {
 fun propertyOrDefault(key: String, default: String = ""): String =
     properties.getProperty(key, default)
 
+fun String.escapeForBuildConfig(): String =
+    this.replace("\\", "\\\\").replace("\"", "\\\"")
+
 android {
     namespace = "com.example.sensorlogger"
     compileSdk = 34
@@ -49,6 +52,17 @@ android {
         val mqttDiscoveryRange = propertyOrDefault("MQTT_DISCOVERY_RANGE", "")
         val mqttDiscoveryTimeoutRaw = propertyOrDefault("MQTT_DISCOVERY_TIMEOUT_MS", "300")
         val mqttDiscoveryTimeout = mqttDiscoveryTimeoutRaw.toIntOrNull()?.coerceAtLeast(100) ?: 300
+        val csvRotateBytes = propertyOrDefault("CSV_ROTATE_BYTES", (20L * 1024 * 1024).toString())
+            .toLongOrNull() ?: 20L * 1024 * 1024
+        val csvRotateMinutes = propertyOrDefault("CSV_ROTATE_MINUTES", (24L * 60).toString())
+            .toLongOrNull() ?: 24L * 60
+        val minioEndpoint = propertyOrDefault("MINIO_ENDPOINT")
+        val minioAccessKey = propertyOrDefault("MINIO_ACCESS_KEY")
+        val minioSecretKey = propertyOrDefault("MINIO_SECRET_KEY")
+        val minioBucket = propertyOrDefault("MINIO_BUCKET", "telemetry")
+        val minioRegion = propertyOrDefault("MINIO_REGION", "us-east-1")
+        val brokerIdExpected = propertyOrDefault("BROKER_ID_EXPECTED", "auramine-prod-broker-01")
+        val brokerSpkiPin = propertyOrDefault("BROKER_SPKI_PIN", "")
 
         val mqttAdditionalHostsRaw = propertyOrDefault("MQTT_ADDITIONAL_HOSTS", "")
         val mqttAdditionalHosts = mqttAdditionalHostsRaw.split(',')
@@ -79,6 +93,15 @@ android {
         buildConfigField("String", "MQTT_DISCOVERY_RANGE", "\"$mqttDiscoveryRange\"")
         buildConfigField("int", "MQTT_DISCOVERY_TIMEOUT_MS", mqttDiscoveryTimeout.toString())
         buildConfigField("String", "OPERATORS_ENDPOINT", "\"$operatorsEndpoint\"")
+        buildConfigField("long", "CSV_ROTATE_BYTES", "${csvRotateBytes}L")
+        buildConfigField("long", "CSV_ROTATE_MINUTES", "${csvRotateMinutes}L")
+        buildConfigField("String", "MINIO_ENDPOINT", "\"${minioEndpoint.escapeForBuildConfig()}\"")
+        buildConfigField("String", "MINIO_ACCESS_KEY", "\"${minioAccessKey.escapeForBuildConfig()}\"")
+        buildConfigField("String", "MINIO_SECRET_KEY", "\"${minioSecretKey.escapeForBuildConfig()}\"")
+        buildConfigField("String", "MINIO_BUCKET", "\"${minioBucket.escapeForBuildConfig()}\"")
+        buildConfigField("String", "MINIO_REGION", "\"${minioRegion.escapeForBuildConfig()}\"")
+        buildConfigField("String", "BROKER_ID_EXPECTED", "\"${brokerIdExpected.escapeForBuildConfig()}\"")
+        buildConfigField("String", "BROKER_SPKI_PIN", "\"${brokerSpkiPin.escapeForBuildConfig()}\"")
     }
 
     buildTypes {
@@ -133,6 +156,7 @@ dependencies {
 
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
